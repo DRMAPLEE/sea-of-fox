@@ -55,7 +55,9 @@ export function parseGLB( buffer ) {
 	}
 
 	if ( ! json ) throw new Error( 'GLB: no JSON chunk' );
-	if ( json.extensionsRequired && json.extensionsRequired.length ) throw new Error( 'GLB: unsupported extensions ' + json.extensionsRequired.join( ', ' ) );
+	const supportedRequired = new Set( [ 'EXT_texture_webp' ] );
+	const unsupported = ( json.extensionsRequired || [] ).filter( ( name ) => ! supportedRequired.has( name ) );
+	if ( unsupported.length ) throw new Error( 'GLB: unsupported extensions ' + unsupported.join( ', ' ) );
 
 	const viewBytes = ( i ) => {
 

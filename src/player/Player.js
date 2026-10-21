@@ -92,6 +92,8 @@ export class Player {
 		this._ashoreT = 0;
 		// set by the fishing game: while a line is out the helm / step ashore prompts give way
 		this.busy = false;
+		// Assigned by NavalArtillery when the pirate ship's broadside stations are ready.
+		this.artillery = null;
 
 	}
 
@@ -211,6 +213,13 @@ export class Player {
 		if ( this.mode === 'boat' ) {
 
 			this.updateBoat( dt );
+			return;
+
+		}
+
+		if ( this.mode === 'cannon' ) {
+
+			this.artillery?.update( dt );
 			return;
 
 		}
@@ -848,6 +857,10 @@ export class Player {
 			}
 
 		}
+
+		// Run this after the standard deck interactions so the closer cannon station owns the prompt.
+		// Entering changes mode immediately, so do not overwrite its third-person camera below.
+		if ( this.artillery?.offerFromDeck( this ) ) return;
 
 		// camera: eye above the feet, following the boat's motion
 		const eyeL = _v.set( p.x, p.y + EYE + Math.sin( this.bob ) * 0.02, p.z );

@@ -114,7 +114,7 @@ const STEP = {
 };
 
 // max simultaneous one-shot voices per category (oldest is faded out beyond this)
-const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1 };
+const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, artillery: 12 };
 
 // loaded at resume(); everything else on first use
 const CORE = [ 'surf_crash', 'surf_wash', 'surf_backwash', 'surf_far', 'wind', 'palms', 'step_sand', 'step_wetsand', 'step_wood', 'step_water', 'step_grass', 'splash', 'swim' ];
@@ -409,6 +409,50 @@ export class SoundScape {
 	coin() {
 
 		this._shot( 'coins', 'coin', this.near, MIX.coins, 0.97 + Math.random() * 0.06 );
+
+	}
+
+	// ------------------------------------------------------------------ naval artillery
+
+	artilleryReady() {
+
+		this._want( 'artillery_flight' );
+		this._want( 'artillery_explosion' );
+
+	}
+
+	artilleryFlight( p ) {
+
+		if ( ! p ) return null;
+		const voice = this._shotAt( 'artillery_flight', 'artillery', p.x, p.y, p.z, - 15, 0.75, 0, 28, 0.72 );
+		if ( voice && voice.extra ) voice.artilleryPanner = voice.extra[ 1 ];
+		return voice;
+
+	}
+
+	moveArtilleryVoice( voice, p ) {
+
+		if ( ! voice?.artilleryPanner || ! p ) return;
+		this._pos( voice.artilleryPanner, p.x, p.y, p.z );
+
+	}
+
+	stopArtilleryVoice( voice ) {
+
+		if ( ! voice || ! this.ctx ) return;
+		try {
+
+			voice.gain.gain.setTargetAtTime( 0, this.ctx.currentTime, 0.035 );
+			voice.src.stop( this.ctx.currentTime + 0.15 );
+
+		} catch ( e ) { /* already ended */ }
+
+	}
+
+	artilleryExplosion( p ) {
+
+		if ( ! p ) return null;
+		return this._shotAt( 'artillery_explosion', 'artillery', p.x, p.y, p.z, - 7, 0.9 + Math.random() * 0.08, 0, 55, 0.65 );
 
 	}
 

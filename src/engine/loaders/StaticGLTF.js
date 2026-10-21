@@ -101,7 +101,10 @@ async function textureSet( gltf ) {
 	const texture = async ( info, srgb ) => {
 
 		if ( ! info ) return null;
-		const source = gltf.textures[ info.index ]?.source;
+		const gltfTexture = gltf.textures[ info.index ];
+		// EXT_texture_webp moves `source` under its extension object. createImageBitmap already
+		// decodes embedded WebP, so the rest of the material path is identical to core glTF images.
+		const source = gltfTexture?.source ?? gltfTexture?.extensions?.EXT_texture_webp?.source;
 		if ( source === undefined ) return null;
 		const key = source + ( srgb ? ':srgb' : ':linear' );
 		if ( ! cache.has( key ) ) {

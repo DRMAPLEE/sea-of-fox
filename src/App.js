@@ -59,6 +59,7 @@ import { AirHaze } from './post/AirHaze.js';
 import { FlyCamera } from './player/FlyCamera.js';
 import { Player } from './player/Player.js';
 import { Game } from './game/Game.js';
+import { NavalArtillery } from './game/NavalArtillery.js';
 import { STAND } from './game/FishStand.js';
 import { CHANDLERY } from './game/Chandlery.js';
 import { BoatController } from './player/BoatController.js';
@@ -426,6 +427,22 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.wake = new WakeSim( renderer, { terrainGPU: this.terrainGPU, boat: this.boatCtl, colliders: this.colliders } );
 		this.surface.wake = this.wake;
 		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, boats: this.boatCtls, reef: this.reef } );
+		this.artillery = new NavalArtillery( {
+			app: this,
+			boat: this.tallShipCtl,
+			cannons: this.tallShipCannons || [],
+			modelUrl: base + 'models/cannon/artillery-projectile.glb',
+		} );
+		try {
+
+			await this.artillery.load();
+
+		} catch ( error ) {
+
+			console.warn( 'artillery projectile failed to load; using cannonball fallback', error );
+
+		}
+		this.artillery.attachPlayer( this.player );
 		// birds, beach crabs, sanderlings (after spray / query / boat, which they use)
 		this.wildlife = new Wildlife( {
 			scene, renderer, terrain: this.terrainData, terrainGPU: this.terrainGPU, shore: this.shore,
@@ -725,7 +742,12 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		if ( s.timeSpeed !== 0 ) s.timeOfDay = ( s.timeOfDay + dt * s.timeSpeed + 24 ) % 24;
 
 		// ---- player / boat (boat physics first so the cameras follow this frame's pose)
-		if ( this.input.hit( 'KeyF' ) ) this.setFreeCam( ! this.freeCam );
+		if ( this.input.hit( 'KeyF' ) ) {
+
+			if ( this.artillery?.active ) this.artillery.exit();
+			this.setFreeCam( ! this.freeCam );
+
+		}
 		if ( this.input.hit( 'KeyT' ) ) this.toggleTime();
 		if ( this.input.hit( 'KeyL' ) ) {
 
@@ -740,20 +762,12 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			if ( this.ui ) this.ui.ui.toast( this.audio.muted ? 'Sound off' : 'Sound on' );
 
 		}
-		if ( this.input.hit( 'KeyX' ) && this.tallShipCannons?.length && this.player.boat === this.tallShipCtl && ( this.player.mode === 'boat' || this.player.mode === 'deck' ) ) {
-
-			const side = this._nextBroadside;
-			const guns = this.tallShipCannons.filter( ( cannon ) => cannon.side === side );
-			for ( let i = 0; i < guns.length; i ++ ) guns[ i ].fire( this.spray, i === 0 && !! this.audio && ! this.audio.muted );
-			this._nextBroadside = side === 'port' ? 'starboard' : 'port';
-			if ( this.ui ) this.ui.ui.toast( `${ side === 'port' ? 'Port' : 'Starboard' } broadside`, 900 );
-
-		}
 		for ( const boat of this.boatCtls ) boat.update( dt );
 		this.boatSpray.update( dt );
 		this.wake.update( dt );
 		if ( this.freeCam ) this.fly.update( dt );
 		else this.player.update( dt );
+		if ( this.player.mode !== 'cannon' ) this.artillery?.updateWorld( dt );
 		this.game.update( dt );
 		this.updateSun();
 

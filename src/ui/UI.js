@@ -2148,10 +2148,12 @@ export class UI {
 					<section>
 						<h3>Interact</h3>
 						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade</small>' ) }
-						${ row( k( 'V' ), 'Boat camera<small>1st / 3rd person</small>' ) }
+						${ row( k( 'V' ), 'Switch camera<small>Boat view, or overhead / gun-deck artillery view</small>' ) }
 						${ row( k( 'R' ), 'Fishing rod<small>Take out / put away</small>' ) }
-						${ row( k( 'X' ), 'Fire broadside<small>Alternates sides on the pirate ship</small>' ) }
-						${ row( k( 'LMB' ), 'Cast, strike, reel<small>Hold to wind up / reel</small>' ) }
+						${ row( k( 'E' ), 'Use broadside guns<small>Stand beside the port or starboard battery</small>' ) }
+						${ row( mouse, 'Aim artillery<small>Horizontal traverse ±50°; vertical range 100 m–2 km</small>' ) }
+						${ row( k( 'Q' ), 'Artillery pattern<small>Circle / horizontal line while aiming</small>' ) }
+						${ row( k( 'LMB' ), 'Fire artillery, cast, strike, reel<small>Context-sensitive</small>' ) }
 						${ row( k( 'RMB' ), 'Reel in an empty line' ) }
 						${ row( k( 'I' ), 'Cooler and fish log' ) }
 						${ row( k( 'F' ), 'Free camera' ) }
