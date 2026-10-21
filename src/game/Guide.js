@@ -345,8 +345,8 @@ export class Guide {
 		if ( s.holdKg >= s.stats.holdKg * 0.92 ) this.tip( 'full' );
 		if ( p.mode === 'walk' ) {
 
-			const bt = app.boatCtl;
-			if ( bt && Math.hypot( bt.position.x - p.position.x, bt.position.z - p.position.z ) < 9 ) this.tip( 'boat' );
+			const nearBoat = ( app.boatCtls || [ app.boatCtl ] ).some( ( bt ) => bt && Math.hypot( bt.position.x - p.position.x, bt.position.z - p.position.z ) < 12 );
+			if ( nearBoat ) this.tip( 'boat' );
 			for ( const v of g.vendors ) if ( v.inRange( p.position ) ) this.tip( v.kind === 'buyer' ? 'joe' : 'marta' );
 
 		}

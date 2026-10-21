@@ -22,6 +22,8 @@ export const WORLD = {
 
 	// Where the boat is moored: east side of the pier head, bow pointing south.
 	boatDock: { position: new THREE.Vector3( 64.5, 0, 36.5 ), heading: 0 },
+	// The tall ship sits to port (+X, visually left while looking out to sea) of the original boat.
+	tallShipDock: { position: new THREE.Vector3( 84.5, 0, 36.5 ), heading: 0 },
 
 	village: { center: new THREE.Vector3( 40, 0, - 118 ), radius: 95 },
 

@@ -192,15 +192,18 @@ export class LocalLights {
 
 		// lamps: on from dusk (same ramp as the lantern glass), nearest first
 		const on = smooth( G.night.value, 0.15, 0.75 ) * this.strength;
-		if ( on > 0.002 && this.enabled ) {
+		if ( this.enabled ) {
 
 			const cp = camera.position;
 			const list = this._list;
 			list.length = 0;
 			for ( const s of this.sources ) {
 
-				if ( s.enabled === false ) continue;
 				if ( s.update ) s.update();
+				if ( s.enabled === false ) continue;
+				const sourceOn = s.alwaysOn ? 1 : on;
+				if ( sourceOn <= 0.002 ) continue;
+				s._sourceOn = sourceOn;
 				s.d2 = s.position.distanceToSquared( cp );
 				list.push( s );
 
@@ -215,7 +218,7 @@ export class LocalLights {
 				const s = list[ i ];
 				const fade = Number.isFinite( dCut ) ? smooth( Math.sqrt( s.d2 ), dCut, dCut * 0.8 ) : 1;
 				const fl2 = s.flicker ? 1 + s.flicker * Math.sin( this.time * 9 + s.phase ) * Math.sin( this.time * 5.3 + s.phase * 0.37 ) : 1;
-				const k = s.intensity * on * fade * fl2 * ( s.scale ?? 1 );
+				const k = s.intensity * s._sourceOn * fade * fl2 * ( s.scale ?? 1 );
 				if ( k <= 1e-4 ) continue;
 				const r = s.range;
 				pos[ n ].set( s.position.x, s.position.y, s.position.z, r * r );
@@ -258,6 +261,55 @@ export function addBoatLights( lights, boat ) {
 		const src = {
 			position: new THREE.Vector3(), color: new THREE.Color( ...d.color ), intensity: d.intensity, range: d.range, kind: d.kind,
 			dir: localDir ? new THREE.Vector3() : null, cosInner: localDir ? 0.25 : undefined, cosOuter: localDir ? - 0.2 : undefined,
+			update() {
+
+				obj.updateWorldMatrix( true, false );
+				this.position.copy( local ).applyMatrix4( obj.matrixWorld );
+				if ( localDir ) this.dir.copy( localDir ).transformDirection( obj.matrixWorld );
+
+			},
+		};
+		src.update();
+		out.push( lights.add( src ) );
+
+	}
+
+	return out;
+
+}
+
+// Lights for the imported 82 m pirate ship. The sources are invisible: they only light the
+// surroundings (decks, sails, nearby water) without rendering a glowing ball per lamp.
+// Positions are in the same boat-local frame used by the controller: +Z bow, -Z stern, +X port.
+// Measured against the pirate ship: main deck y≈3, poop deck y≈6.9, forecastle y≈10.9,
+// bow rails at z≈22, masthead y≈68, stern windows at z≈-41.
+export function addTallShipLights( lights, boat ) {
+
+	const obj = boat.group;
+	const defs = [
+		// Warm deck lamps break the long, dark hull into readable pools of light.
+		{ p: [ 0, 9.3, - 27.7 ], color: [ 1.0, 0.68, 0.38 ], intensity: 55, range: 42, kind: 'tallShipDeck', flicker: 0.025 },
+		{ p: [ 0, 5.3, - 15.5 ], color: [ 1.0, 0.72, 0.43 ], intensity: 50, range: 40, kind: 'tallShipDeck', flicker: 0.02 },
+		{ p: [ 0, 5.1, - 2.2 ], color: [ 1.0, 0.72, 0.43 ], intensity: 50, range: 40, kind: 'tallShipDeck', flicker: 0.02 },
+		{ p: [ 0, 12.6, 12.2 ], color: [ 1.0, 0.68, 0.38 ], intensity: 55, range: 42, kind: 'tallShipDeck', flicker: 0.025 },
+		// Navigation lights: red to port, green to starboard, white high and aft.
+		{ p: [ 5.5, 10.6, 22 ], color: [ 1.0, 0.035, 0.015 ], intensity: 30, range: 48, kind: 'tallShipNav', side: [ 1, 0, 0 ] },
+		{ p: [ - 5.5, 10.6, 22 ], color: [ 0.025, 1.0, 0.16 ], intensity: 30, range: 48, kind: 'tallShipNav', side: [ - 1, 0, 0 ] },
+		{ p: [ 0, 68, 0 ], color: [ 1.0, 0.94, 0.78 ], intensity: 42, range: 60, kind: 'tallShipMast' },
+		{ p: [ 0, 8.4, - 40 ], color: [ 1.0, 0.91, 0.74 ], intensity: 30, range: 44, kind: 'tallShipStern', dir: [ 0, - 0.1, - 1 ] },
+	];
+
+	const out = [];
+	for ( const d of defs ) {
+
+		const local = new THREE.Vector3( ...d.p );
+		const localDir = d.side ? new THREE.Vector3( ...d.side ) : d.dir ? new THREE.Vector3( ...d.dir ).normalize() : null;
+		const src = {
+			position: new THREE.Vector3(), color: new THREE.Color( ...d.color ), intensity: d.intensity, range: d.range, kind: d.kind,
+			dir: localDir ? new THREE.Vector3() : null,
+			cosInner: localDir ? ( d.side ? 0.1 : 0.55 ) : undefined,
+			cosOuter: localDir ? ( d.side ? - 0.35 : 0.0 ) : undefined,
+			flicker: d.flicker,
 			update() {
 
 				obj.updateWorldMatrix( true, false );

@@ -38,8 +38,7 @@ export class Game {
 		this.chandlery = new Chandlery( { scene: app.scene, terrain: app.terrainData, colliders: app.colliders, material: this.stand.material } );
 		this.vendors = [ this.stand.vendor, this.chandlery.vendor ];
 		// boat upgrades: engine (thrust / top speed) and deck floodlights for night fishing
-		const b = app.boatCtl;
-		this._engineBase = { maxThrust: b.maxThrust, pitchSpeed: b.pitchSpeed };
+		this._engineBase = new Map( ( app.boatCtls || [ app.boatCtl ] ).map( ( b ) => [ b, { maxThrust: b.maxThrust, pitchSpeed: b.pitchSpeed } ] ) );
 		this.floods = [];
 		if ( app.localLights ) this.addFloodlights( app.localLights, app.boat );
 		this._fuelOut = false;
@@ -62,11 +61,10 @@ export class Game {
 
 		const g = this.state.stats;
 		this.rod.setGear( { castM: g.castM, reelSpeed: g.reelSpeed } );
-		const b = this.app.boatCtl;
-		if ( b && this._engineBase ) {
+		for ( const [ b, base ] of this._engineBase || [] ) {
 
-			b.maxThrust = this._engineBase.maxThrust * g.speedMul * g.speedMul;
-			b.pitchSpeed = this._engineBase.pitchSpeed * g.speedMul;
+			b.maxThrust = base.maxThrust * g.speedMul * g.speedMul;
+			b.pitchSpeed = base.pitchSpeed * g.speedMul;
 
 		}
 
@@ -318,7 +316,7 @@ export class Game {
 	// fuel burn at the helm (the engine stops when the tank is dry) and the fish finder
 	updateBoat( dt ) {
 
-		const app = this.app, b = app.boatCtl, p = app.player, s = this.state;
+		const app = this.app, p = app.player, b = p.boat || app.boatCtl, s = this.state;
 		if ( b.driven ) {
 
 			const left = s.burn( fuelBurn( b.rpm ) * dt );

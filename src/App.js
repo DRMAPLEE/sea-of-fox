@@ -27,6 +27,8 @@ import { Colliders } from './world/Colliders.js';
 import { Village } from './world/Village.js';
 import { Reef } from './world/Reef.js';
 import { BoatModel } from './world/BoatModel.js';
+import { DeckCannon } from './world/DeckCannon.js';
+import { loadStaticGLTF } from './engine/loaders/StaticGLTF.js';
 import { Rocks } from './world/Rocks.js';
 import { Debris } from './world/Debris.js';
 import { Wildlife } from './world/wildlife/Wildlife.js';
@@ -42,7 +44,7 @@ import { Caustics } from './ocean/Caustics.js';
 import { installUnderwaterLighting } from './ocean/UnderwaterLighting.js';
 import { RefractionPass } from './ocean/RefractionPass.js';
 import { installGroundBounce } from './materials/GroundBounce.js';
-import { LocalLights, addVillageLights, addBoatLights } from './materials/LocalLights.js';
+import { LocalLights, addVillageLights, addBoatLights, addTallShipLights } from './materials/LocalLights.js';
 import { WaterQuery } from './ocean/WaterQuery.js';
 import { Breakers } from './ocean/Breakers.js';
 import { SurfFoam } from './ocean/SurfFoam.js';
@@ -168,6 +170,92 @@ export class App {
 		this.boat.group.position.copy( WORLD.boatDock.position );
 		this.boat.group.rotation.y = WORLD.boatDock.heading;
 
+		// A second, independently driveable boat. Its authored visual is ten times the original
+		// boat's length and is moored to port (+X / screen-left when facing out to sea).
+		// The model is a three-masted pirate ship (black sails, gun deck); all anchors below were
+		// re-measured against it: main deck y≈3.0, waist y≈5.0, poop deck y≈6.9, forecastle y≈10.9,
+		// rails at |x|≈6.9, wheel on the poop deck at z≈-27.7 (mizzen mast z≈-31.7).
+		this.tallShip = new BoatModel();
+		this.tallShip.group.name = 'TallShip';
+		this.tallShip.displayName = 'pirate ship';
+		// The trigger stays beside the pier while boardPoint is the landing position on deck.
+		this.tallShip.directBoard = false;
+		this.tallShip.boardAroundHull = true;
+		this.tallShip.boardHeight = 0.8;
+		this.tallShip.boardTriggerPoint = new Vector3( - 10, 0.8, 0 );
+		this.tallShip.boardPoint.set( - 3.8, 3.0, - 5.5 );
+		this.tallShip.boardPoints = [
+			new Vector3( - 3.8, 3.0, - 5.5 ), new Vector3( 3.8, 3.0, - 5.5 ),
+			new Vector3( - 3.8, 3.0, 2.2 ), new Vector3( 3.8, 3.0, 2.2 ),
+			new Vector3( - 4.2, 5.0, - 13.3 ), new Vector3( 4.2, 5.0, - 13.3 ),
+			new Vector3( 0, 7.0, - 27.7 ),
+		];
+		this.tallShip.boardRadius = 4;
+		this.tallShip.boardVerticalRange = 3;
+		this.tallShip.helmPoint = new Vector3( 0, 6.9, - 29.5 );
+		this.tallShip.helmEye.set( 0, 8.55, - 29.5 );
+		this.tallShip.helmAccessPoints = [ new Vector3( - 2.2, 6.9, - 28.8 ), new Vector3( 2.2, 6.9, - 28.8 ), new Vector3( 0, 6.9, - 29.5 ) ];
+		this.tallShip.helmExitPoint = new Vector3( - 2.2, 6.9, - 28.8 );
+		this.tallShip.helmReach = 2;
+		this.tallShip.deckStepHeight = 0.9;
+		this.tallShip.deckJumpSpeed = 5.2;
+		this.tallShip.exitPoints = [
+			new Vector3( - 6.9, 3.5, - 4.4 ), new Vector3( - 6.9, 3.5, - 17.7 ),
+			new Vector3( 6.9, 3.5, - 4.4 ), new Vector3( 6.9, 3.5, - 17.7 ),
+		];
+		this.tallShip.cameraScale = 10;
+		this.tallShip.cameraDistance = 100;
+		this.tallShip.cameraTargetY = 10;
+		this.tallShip.uprightRate = 4.5;
+		this.tallShip.angularDamping = 5;
+		scene.add( this.tallShip.group );
+		this.tallShip.group.position.copy( WORLD.tallShipDock.position );
+		this.tallShip.group.rotation.y = WORLD.tallShipDock.heading;
+		const base = ( import.meta.env && import.meta.env.BASE_URL ) || '/';
+		try {
+
+			await progress( 0.27, 'Rigging the pirate ship…' );
+			// sinkModel 1.7: the model's painted waterline is ~1.7 model units above the keel
+			await this.tallShip.loadVisual( base + 'models/boat/tall-ship.glb', { sizeMultiplier: 10, sinkModel: 1.7 } );
+
+		} catch ( error ) {
+
+			console.warn( 'tall ship model failed to load; using the procedural fallback', error );
+			this.tallShip.group.scale.setScalar( 10 );
+
+		}
+		if ( this.tallShip.importedVisual ) try {
+
+			await progress( 0.285, 'Mounting the deck cannons…' );
+			// Measured against the pirate ship's geometry: small 1.8 m guns on the waist side shelf,
+			// barrels poking out through the open balustrade (rail top y≈3.9 model, no clipping).
+			// Stations avoid the mizzen shrouds, the mainmast and its shroud group. Mirrored for a
+			// four-gun broadside on each side.
+			const stations = [
+				{ y: 2.83, z: - 16.0 },
+				{ y: 2.83, z: - 19.2 },
+				{ y: 2.82, z: - 14.2 },
+				{ y: 2.84, z: - 10.0 },
+			];
+			this.tallShipCannons = [];
+			for ( const side of [ 1, - 1 ] ) for ( const station of stations ) {
+
+				const cannon = new DeckCannon( { length: 3.5, audioUrl: base + 'audio/heavy-shot.mp3' } );
+				await cannon.load( base + 'models/cannon/cannon-with-muzzle.glb' );
+				cannon.side = side > 0 ? 'port' : 'starboard';
+				cannon.mount( this.tallShip.group, new Vector3( side * 4.1, station.y, station.z ), side > 0 ? 0 : Math.PI );
+				this.tallShipCannons.push( cannon );
+
+			}
+			this._nextBroadside = 'port';
+
+		} catch ( error ) {
+
+			console.warn( 'deck cannons failed to load', error );
+			this.tallShipCannons = [];
+
+		}
+
 		// ---------------------------------------------------------------- ocean
 		await progress( 0.3, 'Simulating the ocean…' );
 		this.fft = new OceanFFT( renderer );
@@ -215,6 +303,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		} );
 		underwaterMode( this.village.group, 'lite' );
 		underwaterMode( this.boat.group, 'lite' );
+		underwaterMode( this.tallShip.group, 'lite' );
 		if ( this.vegetation ) underwaterMode( this.vegetation.group, 'none' );
 
 		this.underwaterLighting = installUnderwaterLighting( {
@@ -234,6 +323,9 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.localLights = new LocalLights();
 		addVillageLights( this.localLights, this.village );
 		addBoatLights( this.localLights, this.boat );
+		for ( const cannon of this.tallShipCannons || [] ) cannon.addLight( this.localLights );
+		if ( this.tallShip.importedVisual ) addTallShipLights( this.localLights, this.tallShip );
+		else addBoatLights( this.localLights, this.tallShip );
 		// rough, large or heavily overdrawn surfaces (ground, rocks, debris, foliage) take the local
 		// lights as Lambert only; the village, pier and boat get the full BRDF (glints on wet wood, metal)
 		for ( const root of [ this.terrain.mesh, this.rocks.group, this.debris && this.debris.group, this.vegetation && this.vegetation.group ] ) if ( root ) root.traverse( ( o ) => {
@@ -289,6 +381,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.airMotes = new AirMotes( { terrain: this.terrainGPU, clouds: this.clouds, csm: this.csm, reversedDepth: true } );
 		scene.add( this.airMotes.mesh );
 		this.boatCtl = new BoatController( { model: this.boat, query: this.query, terrain: this.terrainData, colliders: this.colliders } );
+		this.tallShipCtl = new BoatController( { model: this.tallShip, query: this.query, terrain: this.terrainData, colliders: this.colliders, dock: WORLD.tallShipDock } );
+		this.boatCtls = [ this.boatCtl, this.tallShipCtl ];
 		this.boatSpray = new BoatSpray( { boat: this.boatCtl, spray: this.spray } );
 		// humpback cruising the deep water around the island (model fetched from public/models/whale)
 		this.whale = new Whale( { scene, terrain: this.terrainData, query: this.query, spray: this.spray } );
@@ -304,10 +398,34 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		}
 
+		// Umibozu (海坊主): the black "sea monk" of Japanese folklore — a huge bald head and shoulders
+		// rising from the offing. Edo-period kaidan collections put it at several to tens of meters
+		// over the waves; here ~10 m of the torso break the surface, far south of the bay where the
+		// whale route never reaches. It rides the swell through a water query, like the whale does.
+		this.umibozu = null;
+		try {
+
+			const imported = await loadStaticGLTF( base + 'models/props/umibozu.glb' );
+			const body = imported.group;
+			body.name = 'umibozu';
+			const size = imported.bounds.getSize( new Vector3() );
+			body.scale.setScalar( 12 / size.y ); // ~12 m tall overall, the lowest ~1.5 m stay submerged
+			body.position.set( - 40, - 1.5, 520 ); // open sea south of the bay, facing the shore
+			body.rotation.y = Math.PI; // glTF front (+Z) turned toward the bay (-Z)
+			scene.add( body );
+			underwaterMode( body, 'lite' );
+			this.umibozu = { group: body, slot: this.query.allocate( 'umibozu', 1 ), water: 0, t: 0 };
+
+		} catch ( e ) {
+
+			console.warn( 'umibozu model failed to load', e );
+
+		}
+
 		// interactive wake around the boat (Kelvin pattern, bow/stern waves, prop wash foam)
 		this.wake = new WakeSim( renderer, { terrainGPU: this.terrainGPU, boat: this.boatCtl, colliders: this.colliders } );
 		this.surface.wake = this.wake;
-		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, reef: this.reef } );
+		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, boats: this.boatCtls, reef: this.reef } );
 		// birds, beach crabs, sanderlings (after spray / query / boat, which they use)
 		this.wildlife = new Wildlife( {
 			scene, renderer, terrain: this.terrainData, terrainGPU: this.terrainGPU, shore: this.shore,
@@ -352,6 +470,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		}
 
 		this.boatCtl.onSlam = ( s ) => this.audio && this.audio.hullSlap( s );
+		this.tallShipCtl.onSlam = ( s ) => this.audio && this.audio.hullSlap( s );
 		engine.domElement.addEventListener( 'click', () => {
 
 			if ( window.__ui && window.__ui.isPointerOverUI ) return;
@@ -621,7 +740,16 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			if ( this.ui ) this.ui.ui.toast( this.audio.muted ? 'Sound off' : 'Sound on' );
 
 		}
-		this.boatCtl.update( dt );
+		if ( this.input.hit( 'KeyX' ) && this.tallShipCannons?.length && this.player.boat === this.tallShipCtl && ( this.player.mode === 'boat' || this.player.mode === 'deck' ) ) {
+
+			const side = this._nextBroadside;
+			const guns = this.tallShipCannons.filter( ( cannon ) => cannon.side === side );
+			for ( let i = 0; i < guns.length; i ++ ) guns[ i ].fire( this.spray, i === 0 && !! this.audio && ! this.audio.muted );
+			this._nextBroadside = side === 'port' ? 'starboard' : 'port';
+			if ( this.ui ) this.ui.ui.toast( `${ side === 'port' ? 'Port' : 'Starboard' } broadside`, 900 );
+
+		}
+		for ( const boat of this.boatCtls ) boat.update( dt );
 		this.boatSpray.update( dt );
 		this.wake.update( dt );
 		if ( this.freeCam ) this.fly.update( dt );
@@ -636,7 +764,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.fft.update( dt );
 		this.seaDetail.update( dt );
 		this.query.setCamera( this.camera.position.x, this.camera.position.z );
-		this.boatCtl.queueQueries();
+		for ( const boat of this.boatCtls ) boat.queueQueries();
 		this.query.update();
 		if ( this.query.cpuValid ) {
 
@@ -668,7 +796,24 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.village.update( dt );
 		if ( this.vegetation ) this.vegetation.update( dt, this.camera );
 		if ( this.whale ) this.whale.update( dt, this.camera );
+		// the umibozu rides the swell: height from the GPU water query (1-3 frames old), a slow heavy
+		// sway on the wave normal and a faint yaw drift, so it looms rather than sitting rigidly
+		if ( this.umibozu ) {
+
+			const u = this.umibozu;
+			this.query.setPoint( u.slot, u.group.position.x, u.group.position.z );
+			const r = this.query.cpuValid ? this.query.get( u.slot ) : null;
+			if ( r && Number.isFinite( r.height ) ) u.water += ( r.height - u.water ) * Math.min( 1, dt * 1.5 );
+			u.t += dt;
+			u.group.position.y = - 1.5 + u.water;
+			u.group.rotation.x = ( r ? - r.nz * 0.5 : 0 ) + Math.sin( u.t * 0.23 ) * 0.012;
+			u.group.rotation.z = ( r ? r.nx * 0.5 : 0 ) + Math.sin( u.t * 0.17 ) * 0.012;
+			u.group.rotation.y = Math.PI + Math.sin( u.t * 0.05 ) * 0.1;
+
+		}
 		this.boat.update( dt );
+		this.tallShip.update( dt );
+		for ( const cannon of this.tallShipCannons || [] ) cannon.update( dt );
 		this.wildlife.update( dt, this.camera, this.freeCam ? null : this.player );
 		this.localLights.update( this.camera, dt );
 
@@ -735,8 +880,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			daylight: 1 - G.night.value,
 			nearPier: Math.abs( p.x - WORLD.pier.x ) < 12 && p.z > WORLD.pier.zStart - 5 && p.z < WORLD.pier.zEnd + 8,
 			boat: {
-				active: this.boatCtl.driven, rpm: this.boatCtl.rpm, throttle: this.boatCtl.throttle, speed: this.boatCtl.velocity.length(),
-				position: this.boat.group.position, listenerInside: this.player.mode === 'boat' && this.player.camMode === 'first',
+				active: this.player.boat.driven, rpm: this.player.boat.rpm, throttle: this.player.boat.throttle, speed: this.player.boat.velocity.length(),
+				position: this.player.boat.model.group.position, listenerInside: this.player.mode === 'boat' && this.player.camMode === 'first',
 			},
 		} );
 

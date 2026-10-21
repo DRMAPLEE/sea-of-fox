@@ -35,6 +35,13 @@ export const VIEWS = {
 	tStacks: { p: [ - 240, 8, 300 ], yaw: 0.15, pitch: - 0.05, time: 16.5 },
 	tCove: { p: [ - 160, 2.2, - 30 ], yaw: 1.35, pitch: - 0.08, time: 10.5 },
 	tMorning: { p: [ 18, 3.0, - 60 ], yaw: 0.2, pitch: 0.05, time: 7.2 },
+	// the pirate ship at its mooring: broadside from seaward, the stern quarter, and standing on the poop deck
+	pirateShip: { p: [ 130, 12, 36 ], yaw: Math.PI * 0.5, pitch: - 0.1, time: 16.2 },
+	pirateShipStern: { p: [ 108, 9, - 16 ], yaw: 2.2, pitch: - 0.08, time: 15.5 },
+	pirateShipDeck: { p: [ 84.5, 8.6, 6.5 ], yaw: Math.PI, pitch: - 0.06, time: 16.2 },
+	// the umibozu in the southern offing: up close, and as seen from the pier head at dusk
+	umibozu: { p: [ - 40, 7, 462 ], yaw: Math.PI, pitch: - 0.02, time: 10.0 },
+	umibozuFromPier: { p: [ 70, 4, 30 ], yaw: 2.92, pitch: 0.01, time: 18.6 },
 };
 
 export function installDebugViews( app ) {

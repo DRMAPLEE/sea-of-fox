@@ -14,12 +14,15 @@ const STAND_DEPTH = 1.1;
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler( 0, 0, 0, 'YXZ' );
 const _yAxis = new THREE.Vector3( 0, 1, 0 );
 const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _qc = new THREE.Quaternion();
+const _invBoatQ = new THREE.Quaternion();
 const _wish = new THREE.Vector3();
 // walking on the boat
 const DECK_RADIUS = 0.24;
@@ -34,14 +37,15 @@ const HELM_REACH = 0.75; // m from the helm seat to take the wheel
 //   boat : at the helm, driving; V toggles helm (1st person) / chase (3rd person) camera, E stands up
 export class Player {
 
-	constructor( { camera, input, terrain, colliders, query, boat, reef = null, audio = null } ) {
+	constructor( { camera, input, terrain, colliders, query, boat, boats = null, reef = null, audio = null } ) {
 
 		this.camera = camera;
 		this.input = input;
 		this.terrain = terrain;
 		this.colliders = colliders;
 		this.query = query;
-		this.boat = boat;
+		this.boats = boats || ( boat ? [ boat ] : [] );
+		this.boat = boat || this.boats[ 0 ] || null;
 		this.reef = reef;
 		this.audio = audio;
 
@@ -121,11 +125,76 @@ export class Player {
 
 	nearBoat() {
 
-		if ( ! this.boat ) return false;
-		const bp = this.boat.toWorld( this.boat.model.boardPoint, _v );
-		const d = Math.hypot( bp.x - this.position.x, bp.z - this.position.z );
-		const dy = Math.abs( bp.y - this.position.y );
-		return d < 4.2 && dy < 3.2;
+		let best = null, bestDistance = Infinity;
+		for ( const boat of this.boats ) {
+
+			let d, dy;
+			if ( boat.model.boardAroundHull && boat.model.meshCollider ) {
+
+				// Distance to the moving ship's local X/Z footprint. Expanding this footprint by
+				// boardRadius produces one continuous boarding band around both sides and both ends.
+				_invBoatQ.copy( boat.quaternion ).invert();
+				_v.copy( this.position ).sub( boat.position ).applyQuaternion( _invBoatQ );
+				const bounds = boat.model.meshCollider.bounds;
+				const dx = Math.max( bounds.min.x - _v.x, 0, _v.x - bounds.max.x );
+				const dz = Math.max( bounds.min.z - _v.z, 0, _v.z - bounds.max.z );
+				d = Math.hypot( dx, dz );
+				dy = Math.abs( _v.y - ( boat.model.boardHeight || 0 ) );
+
+			} else {
+
+				const bp = boat.toWorld( boat.model.boardTriggerPoint || boat.model.boardPoint, _v );
+				d = Math.hypot( bp.x - this.position.x, bp.z - this.position.z );
+				dy = Math.abs( bp.y - this.position.y );
+
+			}
+			if ( d < ( boat.model.boardRadius || 4.2 ) && dy < ( boat.model.boardVerticalRange || 3.2 ) && d < bestDistance ) {
+
+				best = boat;
+				bestDistance = d;
+
+			}
+
+		}
+		if ( best ) this.boat = best;
+		return !! best;
+
+	}
+
+	// Exact collision against authored moving meshes. The capsule remains upright in world space;
+	// its two sphere centres are transformed into each boat's rigid local frame for the BVH query.
+	resolveBoatMeshes( oldPosition, height ) {
+
+		const target = _v3.copy( this.position );
+		const delta = _v4.subVectors( target, oldPosition );
+		const steps = Math.max( 1, Math.min( 12, Math.ceil( delta.length() / ( RADIUS * 0.45 ) ) ) );
+		delta.multiplyScalar( 1 / steps );
+		const probe = this.position.copy( oldPosition );
+		let hit = false, grounded = false;
+		for ( let step = 0; step < steps; step ++ ) {
+
+			probe.add( delta );
+			for ( const boat of this.boats ) {
+
+				const collider = boat.model.meshCollider;
+				if ( ! collider ) continue;
+				_invBoatQ.copy( boat.quaternion ).invert();
+				const a = _v.copy( probe ).addScaledVector( _yAxis, RADIUS ).sub( boat.position ).applyQuaternion( _invBoatQ );
+				const b = _v2.copy( probe ).addScaledVector( _yAxis, Math.max( RADIUS, height - RADIUS ) ).sub( boat.position ).applyQuaternion( _invBoatQ );
+				const result = collider.resolveSegment( a, b, RADIUS );
+				if ( ! result.hit ) continue;
+				const push = result.displacement.applyQuaternion( boat.quaternion );
+				probe.add( push );
+				const normal = result.normal.applyQuaternion( boat.quaternion ).normalize();
+				const into = this.velocity.dot( normal );
+				if ( into < 0 ) this.velocity.addScaledVector( normal, - into );
+				hit = true;
+				if ( normal.y > 0.45 || result.grounded ) grounded = true;
+
+			}
+
+		}
+		return { hit, grounded };
 
 	}
 
@@ -160,10 +229,11 @@ export class Player {
 		// (not with a line out or a fish in hand: E belongs to the fishing then)
 		if ( this.nearBoat() && ! this.busy ) {
 
-			this.prompt = { key: 'E', text: 'Board boat' };
+			this.prompt = { key: 'E', text: `Board ${ this.boat.model.displayName || 'boat' }` };
 			if ( inp.hit( 'KeyE' ) ) {
 
-				this.boardBoat();
+				if ( this.boat.model.directBoard ) this.enterBoat();
+				else this.boardBoat();
 				return;
 
 			}
@@ -238,6 +308,7 @@ export class Player {
 		const old = p.clone();
 		p.addScaledVector( this.velocity, dt );
 		this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+		const boatContact = this.resolveBoatMeshes( old, HEIGHT );
 		const g = this.groundAt( p.x, p.z, p.y + 0.45 );
 		if ( p.y <= g ) {
 
@@ -247,7 +318,7 @@ export class Player {
 
 		} else {
 
-			this.grounded = p.y - g < 0.06;
+			this.grounded = boatContact.grounded || p.y - g < 0.06;
 
 		}
 
@@ -336,9 +407,11 @@ export class Player {
 
 		}
 
+		const old = p.clone();
 		p.addScaledVector( this.velocity, dt );
 		p.y = Math.min( p.y, surfaceY + 0.05 );
 		this.colliders.resolveCapsule( p, RADIUS, 1.0, 0 );
+		this.resolveBoatMeshes( old, 1.0 );
 		const g = this.groundAt( p.x, p.z, p.y + 0.3 );
 		if ( p.y < g + 0.25 ) p.y = g + 0.25;
 
@@ -417,7 +490,27 @@ export class Player {
 
 		const b = this.boat;
 		this.mode = 'deck';
-		this.deckPos.copy( b.model.boardPoint );
+		let landing = b.model.boardPoint;
+		if ( b.model.boardPoints?.length ) {
+
+			_invBoatQ.copy( b.quaternion ).invert();
+			_v.copy( this.position ).sub( b.position ).applyQuaternion( _invBoatQ );
+			let distance = Infinity;
+			for ( const candidate of b.model.boardPoints ) {
+
+				const d = ( candidate.x - _v.x ) ** 2 + ( candidate.z - _v.z ) ** 2;
+				if ( d < distance ) { distance = d; landing = candidate; }
+
+			}
+
+		}
+		this.deckPos.copy( landing );
+		if ( b.model.meshCollider ) {
+
+			const deckY = b.model.meshCollider.groundHeightAt( this.deckPos.x, this.deckPos.z, this.deckPos.y + 2, b.model.meshCollider.bounds.min.y );
+			if ( Number.isFinite( deckY ) ) this.deckPos.y = deckY;
+
+		}
 		this.deckVel.set( 0, 0, 0 );
 		// keep looking where you looked (relative to the boat)
 		this.deckYaw = this.yaw - ( b.getYaw() + Math.PI );
@@ -439,6 +532,7 @@ export class Player {
 		this.helmYaw = 0;
 		this.helmPitch = - 0.05;
 		this.orbitYaw = this.boat.getYaw() + Math.PI;
+		this.orbitDist = this.boat.model.cameraDistance || 13;
 		this.camInit = false;
 		if ( this.audio ) this.audio.engineStart();
 
@@ -451,7 +545,14 @@ export class Player {
 		b.driven = false;
 		b.throttle = 0;
 		this.mode = 'deck';
-		this.deckPos.set( HOUSE_HELM.x + 0.45, b.model.lines.deckY, HOUSE_HELM.z - 0.1 );
+		const helm = b.model.helmExitPoint || b.model.helmPoint || _v.set( HOUSE_HELM.x, b.model.lines.deckY, HOUSE_HELM.z );
+		this.deckPos.set( helm.x, helm.y, helm.z );
+		if ( b.model.meshCollider ) {
+
+			const deckY = b.model.meshCollider.groundHeightAt( this.deckPos.x, this.deckPos.z, this.deckPos.y + DECK_STEP, b.model.meshCollider.bounds.min.y );
+			if ( Number.isFinite( deckY ) ) this.deckPos.y = deckY;
+
+		}
 		this.deckVel.set( 0, 0, 0 );
 		this.deckYaw = this.helmYaw;
 		this.pitch = this.helmPitch;
@@ -480,7 +581,7 @@ export class Player {
 		// the exit point closest to something walkable (pier deck / sand)
 		let best = side ? null : this.ashoreTarget();
 
-		const dock = WORLD.boatDock.position;
+		const dock = b.dock.position;
 		if ( b.position.distanceTo( dock ) < 14 && b.speed < 1.5 ) {
 
 			b.moored = true;
@@ -497,7 +598,14 @@ export class Player {
 
 		} else {
 
-			const w = b.toWorld( new THREE.Vector3( 2.2 * ( side || 1 ), 0, 0 ), new THREE.Vector3() );
+			let jumpPoint;
+			if ( b.model.meshCollider ) {
+
+				const bounds = b.model.meshCollider.bounds, s = side || Math.sign( this.deckPos.x ) || 1;
+				jumpPoint = new THREE.Vector3( s > 0 ? bounds.max.x + 0.8 : bounds.min.x - 0.8, 0, THREE.MathUtils.clamp( this.deckPos.z, bounds.min.z + 1, bounds.max.z - 1 ) );
+
+			} else jumpPoint = b.model.directBoard ? b.model.boardPoint : new THREE.Vector3( 2.2 * ( side || 1 ), 0, 0 );
+			const w = b.toWorld( jumpPoint, new THREE.Vector3() );
 			// (the boat floats at the water line: the walker's water height is stale while aboard)
 			this.waterH = this.waterMean = b.position.y;
 			this.position.set( w.x, b.position.y - 0.2, w.z );
@@ -569,7 +677,9 @@ export class Player {
 	// highest walkable box top under the point (boat frame), not above maxY; the sole otherwise
 	deckGroundAt( x, z, maxY ) {
 
-		const L = this.boat.model.lines;
+		const model = this.boat.model;
+		if ( model.meshCollider ) return model.meshCollider.groundHeightAt( x, z, maxY, model.meshCollider.bounds.min.y );
+		const L = model.lines;
 		let g = L.deckY;
 		for ( const c of this.boat.model.colliders ) {
 
@@ -589,6 +699,7 @@ export class Player {
 		const inp = this.input;
 		const b = this.boat;
 		const L = b.model.lines;
+		const stepHeight = b.model.deckStepHeight || DECK_STEP;
 		const look = inp.consumeLook();
 		this.deckYaw -= look.x * 0.0022;
 		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.5, 1.5 );
@@ -610,7 +721,7 @@ export class Player {
 		v.z += ( _wish.z * speed - v.z ) * k;
 		if ( this.deckGrounded && inp.hit( 'Space' ) ) {
 
-			v.y = 3.2;
+			v.y = b.model.deckJumpSpeed || 3.2;
 			this.deckGrounded = false;
 
 		}
@@ -620,27 +731,48 @@ export class Player {
 		const oldX = p.x, oldZ = p.z;
 		p.addScaledVector( v, dt );
 
-		// walls: push out of the solid boxes you can't step onto (boat frame, axis aligned)
-		for ( let iter = 0; iter < 2; iter ++ ) for ( const c of b.model.colliders ) {
+		if ( b.model.meshCollider ) {
 
-			if ( ! c.solid ) continue;
-			const top = c.center.y + c.half.y, bot = c.center.y - c.half.y;
-			if ( top <= p.y + DECK_STEP || bot >= p.y + HEIGHT ) continue;
-			const ex = c.half.x + DECK_RADIUS, ez = c.half.z + DECK_RADIUS;
-			const dx = p.x - c.center.x, dz = p.z - c.center.z;
-			if ( Math.abs( dx ) >= ex || Math.abs( dz ) >= ez ) continue;
-			const px = ex - Math.abs( dx ), pz = ez - Math.abs( dz );
-			if ( px < pz ) { p.x += Math.sign( dx || ( oldX - c.center.x ) || 1 ) * px; v.x = 0; }
-			else { p.z += Math.sign( dz || ( oldZ - c.center.z ) || 1 ) * pz; v.z = 0; }
+			// Step onto shallow authored geometry before resolving the full capsule against the mesh.
+			const stepY = this.deckGroundAt( p.x, p.z, p.y + stepHeight );
+			if ( Number.isFinite( stepY ) && stepY > p.y && stepY - p.y <= stepHeight ) p.y = stepY;
+			const capA = _v.set( p.x, p.y + DECK_RADIUS, p.z );
+			const capB = _v2.set( p.x, p.y + HEIGHT - DECK_RADIUS, p.z );
+			const contact = b.model.meshCollider.resolveSegment( capA, capB, DECK_RADIUS, { iterations: 5 } );
+			if ( contact.hit ) {
+
+				p.add( contact.displacement );
+				const into = v.dot( contact.normal );
+				if ( into < 0 ) v.addScaledVector( contact.normal, - into );
+				if ( contact.grounded && v.y < 0 ) v.y = 0;
+
+			}
+
+		} else {
+
+			// Procedural boat: compact hand-authored boxes are cheaper and provide intentional steps.
+			for ( let iter = 0; iter < 2; iter ++ ) for ( const c of b.model.colliders ) {
+
+				if ( ! c.solid ) continue;
+				const top = c.center.y + c.half.y, bot = c.center.y - c.half.y;
+				if ( top <= p.y + stepHeight || bot >= p.y + HEIGHT ) continue;
+				const ex = c.half.x + DECK_RADIUS, ez = c.half.z + DECK_RADIUS;
+				const dx = p.x - c.center.x, dz = p.z - c.center.z;
+				if ( Math.abs( dx ) >= ex || Math.abs( dz ) >= ez ) continue;
+				const px = ex - Math.abs( dx ), pz = ez - Math.abs( dz );
+				if ( px < pz ) { p.x += Math.sign( dx || ( oldX - c.center.x ) || 1 ) * px; v.x = 0; }
+				else { p.z += Math.sign( dz || ( oldZ - c.center.z ) || 1 ) * pz; v.z = 0; }
+
+			}
+
+			// stay inside the procedural hull (the bulwarks, plus a margin fore and aft)
+			p.z = THREE.MathUtils.clamp( p.z, L.zAft + L.shell + DECK_RADIUS, 4.0 );
+			const halfIn = Math.max( 0.15, L.halfBreadth( L.tAtSheerZ( p.z ), Math.max( p.y, L.deckY ) ) - L.shell - DECK_RADIUS );
+			p.x = THREE.MathUtils.clamp( p.x, - halfIn, halfIn );
 
 		}
 
-		// stay inside the hull (the bulwarks, plus a margin fore and aft)
-		p.z = THREE.MathUtils.clamp( p.z, L.zAft + L.shell + DECK_RADIUS, 4.0 );
-		const halfIn = Math.max( 0.15, L.halfBreadth( L.tAtSheerZ( p.z ), Math.max( p.y, L.deckY ) ) - L.shell - DECK_RADIUS );
-		p.x = THREE.MathUtils.clamp( p.x, - halfIn, halfIn );
-
-		const g = this.deckGroundAt( p.x, p.z, p.y + DECK_STEP );
+		const g = this.deckGroundAt( p.x, p.z, p.y + stepHeight );
 		if ( p.y <= g ) {
 
 			p.y = g;
@@ -667,8 +799,9 @@ export class Player {
 		this.deckToWorld();
 
 		// prompts: take the helm, or step ashore
-		const hx = HOUSE_HELM.x, hz = HOUSE_HELM.z;
-		const nearHelm = Math.hypot( p.x - hx, p.z - hz ) < HELM_REACH && ! this.busy;
+		const helm = b.model.helmPoint || _v.set( HOUSE_HELM.x, b.model.lines.deckY, HOUSE_HELM.z );
+		const helmTargets = b.model.helmAccessPoints || [ helm ];
+		const nearHelm = helmTargets.some( ( point ) => Math.hypot( p.x - point.x, p.z - point.z ) < ( b.model.helmReach || HELM_REACH ) && Math.abs( p.y - point.y ) < Math.max( 1.4, stepHeight + 0.2 ) ) && ! this.busy;
 		this._ashoreT -= dt;
 		if ( this._ashoreT <= 0 ) {
 
@@ -735,7 +868,8 @@ export class Player {
 		if ( inp.hit( 'KeyV' ) ) this.camMode = this.camMode === 'first' ? 'third' : 'first';
 		if ( inp.hit( 'KeyE' ) ) {
 
-			this.leaveHelm();
+			if ( b.model.directBoard ) this.exitBoat( null, Math.sign( b.model.boardPoint.x ) || 1 );
+			else this.leaveHelm();
 			return;
 
 		}
@@ -770,7 +904,8 @@ export class Player {
 
 			this.orbitYaw -= look.x * 0.003;
 			this.orbitPitch = THREE.MathUtils.clamp( this.orbitPitch + look.y * 0.003, - 0.05, 1.2 );
-			this.orbitDist = THREE.MathUtils.clamp( this.orbitDist * ( 1 + wheel * 0.08 ), 6, 40 );
+			const cameraScale = b.model.cameraScale || 1;
+			this.orbitDist = THREE.MathUtils.clamp( this.orbitDist * ( 1 + wheel * 0.08 ), 6 * cameraScale, 40 * cameraScale );
 			// gently swing behind the boat when moving
 			if ( b.speed > 2 && Math.abs( look.x ) < 0.5 ) {
 
@@ -781,7 +916,7 @@ export class Player {
 
 			}
 
-			const target = b.toWorld( new THREE.Vector3( 0, 1.4, 0 ), new THREE.Vector3() );
+			const target = b.toWorld( new THREE.Vector3( 0, b.model.cameraTargetY || 1.4, 0 ), new THREE.Vector3() );
 			const off = new THREE.Vector3(
 				Math.sin( this.orbitYaw ) * Math.cos( this.orbitPitch ),
 				Math.sin( this.orbitPitch ),

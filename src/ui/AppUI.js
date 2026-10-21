@@ -271,7 +271,7 @@ export class AppUI {
 		if ( p.prompt ) ui.setPrompt( p.prompt.key, p.prompt.text );
 		else ui.setPrompt( null );
 
-		const b = app.boatCtl;
+		const b = p.boat || app.boatCtl;
 		if ( p.mode === 'boat' ) {
 
 			const f = b.forward( new THREE.Vector3() );

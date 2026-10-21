@@ -133,7 +133,18 @@ export class Minimap {
 			}, hideWhen: () => {
 
 				const p = game.app.player;
-				return p.mode === 'boat' || p.mode === 'deck';
+				return ( p.mode === 'boat' || p.mode === 'deck' ) && p.boat === game.app.boatCtl;
+
+			} },
+			{ id: 'tall-ship', ...mk( 'boat', ICON.boat ), pos: () => {
+
+				const b = game.app.tallShipCtl;
+				return b ? { x: b.position.x, z: b.position.z } : null;
+
+			}, hideWhen: () => {
+
+				const p = game.app.player;
+				return ( p.mode === 'boat' || p.mode === 'deck' ) && p.boat === game.app.tallShipCtl;
 
 			} },
 		];

@@ -7,12 +7,15 @@ import { buildHull, buildHullVolume, keelVolume, houseHalfWidth, KEEL } from './
 import { buildWheelhouse, wheelGeometry, throttleGeometry, radarArrayGeometry, HOUSE, roofTopY } from './boat/Wheelhouse.js';
 import { buildDeckGear, TRAPS, TRAP, HAULER } from './boat/DeckGear.js';
 import { propellerGeometry, rudderGeometry, PROP, RUDDER } from './boat/Running.js';
+import { loadStaticGLTF } from '../engine/loaders/StaticGLTF.js';
+import { DynamicMeshCollider } from './DynamicMeshCollider.js';
 
 const STATIC_BUCKETS = [ 'hull', 'gelcoat', 'wood', 'fittings', 'trap', 'glow', 'glass' ];
 const WHEEL_TURNS = 0.75; // wheel turns from centre to hard over
 const THROTTLE_ANGLE = 0.6; // lever travel (rad) from neutral to full
 const RADAR_RPM = 24;
 const PROP_DISPLAY_RPS = 5;
+const COLLIDER_CACHE = new Map();
 
 const _v = new Vector3();
 const _pos = new Vector3();
@@ -192,6 +195,46 @@ export class BoatModel {
 
 		this.setSteering( 0 );
 		this.setThrottle( 0 );
+
+	}
+
+	// Replace this instance's procedural render mesh with an authored glTF skin while retaining its
+	// controller-facing hydrostatics. `sizeMultiplier` is relative to the original 8.2 m boat.
+	// `sinkModel` (optional, in the imported model's own units) sets how deep the model's lowest
+	// point rides below the waterline; by default the keel depth is derived from the hull lines.
+	// If loading fails, the procedural mesh stays visible as a complete fallback.
+	async loadVisual( url, { sizeMultiplier = 1, sinkModel = null } = {} ) {
+
+		const imported = await loadStaticGLTF( url );
+		const size = imported.bounds.getSize( new Vector3() );
+		const center = imported.bounds.getCenter( new Vector3() );
+		if ( ! ( size.z > 0.1 ) ) throw new Error( 'BoatModel: imported model has invalid bounds' );
+
+		const scale = this.dimensions.length * sizeMultiplier / size.z;
+		const sink = sinkModel != null ? sinkModel * scale : this.dimensions.draft * 0.82 * sizeMultiplier;
+		const visual = imported.group;
+		visual.name = 'TallShipVisual';
+		visual.scale.setScalar( scale );
+		visual.position.set( - center.x * scale, - imported.bounds.min.y * scale - sink, - center.z * scale );
+		this.group.add( visual );
+		// Bake the authored mesh into this boat's local frame. The BVH remains valid while the
+		// controller translates and rotates the boat, so additional ships only add query cost when
+		// their broad-phase bounds overlap the player.
+		this.group.updateWorldMatrix( true, true );
+		const colliderKey = `${ url }|${ sizeMultiplier }`;
+		this.meshCollider = COLLIDER_CACHE.get( colliderKey );
+		if ( ! this.meshCollider ) {
+
+			this.meshCollider = DynamicMeshCollider.fromObject( visual, this.group );
+			COLLIDER_CACHE.set( colliderKey, this.meshCollider );
+
+		}
+
+		for ( const mesh of Object.values( this.meshes ) ) mesh.visible = false;
+		this.importedVisual = visual;
+		this.importedMaterials = imported.materials;
+		this.visualScale = sizeMultiplier;
+		return visual;
 
 	}
 

@@ -49,12 +49,13 @@ const _dq = new THREE.Quaternion();
 // mooring lines as before.
 export class BoatController {
 
-	constructor( { model, query, terrain, colliders } ) {
+	constructor( { model, query, terrain, colliders, dock = WORLD.boatDock } ) {
 
 		this.model = model;
 		this.query = query;
 		this.terrain = terrain;
 		this.colliders = colliders;
+		this.dock = { position: dock.position.clone(), heading: dock.heading };
 
 		const hydro = model.hydro || {};
 		this.mass = hydro.suggestedMass || 3200;
@@ -88,8 +89,8 @@ export class BoatController {
 		this.rudderLift = 2.8; // rudder lift slope (x area 0.12 m^2), includes the hull's flap effect
 
 		// state (position = model origin at the design waterline)
-		this.position = new THREE.Vector3().copy( WORLD.boatDock.position );
-		this.quaternion = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3( 0, 1, 0 ), WORLD.boatDock.heading );
+		this.position = new THREE.Vector3().copy( this.dock.position );
+		this.quaternion = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3( 0, 1, 0 ), this.dock.heading );
 		this.velocity = new THREE.Vector3();
 		this.angular = new THREE.Vector3();
 
@@ -101,7 +102,7 @@ export class BoatController {
 		this.reverseFactor = 0.45; // astern thrust relative to ahead
 		this.driven = false;
 		this.moored = true;
-		this.mooring = { anchor: WORLD.boatDock.position.clone(), heading: WORLD.boatDock.heading };
+		this.mooring = { anchor: this.dock.position.clone(), heading: this.dock.heading };
 
 		const n = this.samples.length;
 		this.waterH = new Float32Array( n ); // latest read-back
@@ -240,6 +241,23 @@ export class BoatController {
 			this.step( h );
 			this._acc -= h;
 			steps ++;
+
+		}
+
+		// A ship whose render scale is many times the hydrodynamic proxy should not magnify the
+		// proxy's small-boat roll into mast-sweeping arcs. Preserve yaw/steering while easing pitch
+		// and roll toward upright, and damp only the local pitch/roll angular velocity.
+		if ( this.model.uprightRate ) {
+
+			const yaw = this.getYaw();
+			_c1.set( 0, 1, 0 );
+			_dq.setFromAxisAngle( _c1, yaw );
+			this.quaternion.slerp( _dq, 1 - Math.exp( - dt * this.model.uprightRate ) ).normalize();
+			_v.copy( this.angular ).applyQuaternion( _invQ.copy( this.quaternion ).invert() );
+			const damp = Math.exp( - dt * ( this.model.angularDamping || 0 ) );
+			_v.x *= damp;
+			_v.z *= damp;
+			this.angular.copy( _v.applyQuaternion( this.quaternion ) );
 
 		}
 
@@ -438,16 +456,16 @@ export class BoatController {
 	// back to the berth, at rest (safety net if the integration ever blows up)
 	reset() {
 
-		this.position.copy( WORLD.boatDock.position );
-		this.quaternion.setFromAxisAngle( new THREE.Vector3( 0, 1, 0 ), WORLD.boatDock.heading );
+		this.position.copy( this.dock.position );
+		this.quaternion.setFromAxisAngle( new THREE.Vector3( 0, 1, 0 ), this.dock.heading );
 		this.velocity.set( 0, 0, 0 );
 		this.angular.set( 0, 0, 0 );
 		this.throttle = 0;
 		this.steer = 0;
 		this.rpm = 0;
 		this.moored = true;
-		this.mooring.anchor.copy( WORLD.boatDock.position );
-		this.mooring.heading = WORLD.boatDock.heading;
+		this.mooring.anchor.copy( this.dock.position );
+		this.mooring.heading = this.dock.heading;
 
 	}
 
