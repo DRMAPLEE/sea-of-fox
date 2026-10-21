@@ -66,6 +66,7 @@ export class TerrainGPU {
 		// trilinear, clamp to edge (smpLinearClamp), linear data (no colour space)
 		this.normalTexture = dataTexture( maps.normal, res, res, 'rgba8unorm', 'terrainNormalRockAO', true );
 		this.splatTexture = dataTexture( maps.splat, res, res, 'rgba8unorm', 'terrainSplat', true );
+		this.biomeTexture = dataTexture( this._packBiomes(), res, res, 'rgba8unorm', 'terrainBiomes', true );
 		this.detailTexture = getDetailTexture();
 
 		// coarse heights for the sun shadow march (half float is filterable everywhere)
@@ -106,6 +107,7 @@ export class TerrainGPU {
 				terrainHeightTex: { texture: this.heightTexture, sampleType: 'unfilterable-float' },
 				terrainNormalTex: { texture: this.normalTexture },
 				terrainSplatTex: { texture: this.splatTexture },
+				terrainBiomeTex: { texture: this.biomeTexture },
 				terrainDetailTex: detailBinding(),
 				terrainShoreTex: { texture: () => this.shoreTexture, sampleType: 'unfilterable-float' },
 				terrainSunShadowTex: { texture: this.sunShadowTexture },
@@ -215,6 +217,73 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 	}
 
+	// Upload only the edited rectangle of the CPU height field. The editor calls this while a
+	// brush is moving; the more expensive normal/AO/splat/shadow maps are rebuilt when the stroke
+	// ends via rebuildDerived(). Coordinates are height-map texel coordinates.
+	updateHeightRegion( { x0, y0, x1, y1 } ) {
+
+		const res = this.terrain.res;
+		x0 = Math.max( 0, Math.floor( x0 ) );
+		y0 = Math.max( 0, Math.floor( y0 ) );
+		x1 = Math.min( res - 1, Math.ceil( x1 ) );
+		y1 = Math.min( res - 1, Math.ceil( y1 ) );
+		if ( x1 < x0 || y1 < y0 ) return false;
+		const width = x1 - x0 + 1, height = y1 - y0 + 1;
+		const src = this.terrain.heights;
+		const data = new Float32Array( width * height );
+		for ( let y = 0; y < height; y ++ ) {
+
+			const from = ( y0 + y ) * res + x0;
+			data.set( src.subarray( from, from + width ), y * width );
+
+		}
+		this.heightTexture.upload( data, { x: x0, y: y0, width, height } );
+		return true;
+
+	}
+
+	// Recreate every terrain-derived texture after an edit. This is intentionally a stroke-end
+	// operation: horizon AO and the shadow-height mip chain inspect a large part of the island.
+	rebuildDerived() {
+
+		const maps = bakeTerrainMaps( this.terrain );
+		this.normalTexture.upload( maps.normal );
+		this.splatTexture.upload( maps.splat );
+		this.biomeTexture.upload( this._packBiomes() );
+		generateMipmaps( this.normalTexture );
+		generateMipmaps( this.splatTexture );
+		generateMipmaps( this.biomeTexture );
+
+		const sh = buildShadowHeights( this.terrain, 4 );
+		sh.levels.forEach( ( level, mip ) => this.shadowHeightTexture.upload( level.data, {
+			mip, width: level.width, height: level.height,
+		} ) );
+		this.shadowTexel = sh.texel;
+		this.maxHeight = sh.maxHeight;
+		this._sunBaked = false;
+		this.uSunBaked.value = 0;
+		this.timings = { ...this.timings, ...maps.ms };
+		return maps.ms;
+
+	}
+
+	_packBiomes() {
+
+		const t = this.terrain, n = t.res * t.res;
+		const data = new Uint8Array( n * 4 );
+		for ( let i = 0; i < n; i ++ ) {
+
+			const o = i * 4;
+			data[ o ] = t.meadow?.[ i ] || 0;
+			data[ o + 1 ] = t.forest?.[ i ] || 0;
+			data[ o + 2 ] = t.snow?.[ i ] || 0;
+			data[ o + 3 ] = 255;
+
+		}
+		return data;
+
+	}
+
 }
 
 const TERRAIN_WGSL = /* wgsl */`
@@ -262,6 +331,11 @@ fn terrainSplat( xz: vec2f ) -> vec4f {
 }
 fn terrainSplatLevel( xz: vec2f, level: f32 ) -> vec4f {
 	return textureSampleLevel( terrainSplatTex, smpLinearClamp, terrainUvOf( xz ), level );
+}
+
+// authored biome overrides: meadow, forest, snow, reserved
+fn terrainBiome( xz: vec2f ) -> vec4f {
+	return textureSample( terrainBiomeTex, smpLinearClamp, terrainUvOf( xz ) );
 }
 
 // shore field: (T, dirX, dirZ, exposure), bilinear via loads (float32 data)

@@ -18,6 +18,21 @@ window.__ui = ui;
 
 app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async () => {
 
+	if ( app.qs.has( 'editor' ) ) {
+
+		ui.setLoading( 1, 'Opening map workshop' );
+		await ui.hideLoader();
+		ui.dispose();
+		document.title = 'Tidewater — Map Workshop';
+		const { EditorApp } = await import( './editor/EditorApp.js' );
+		const editor = new EditorApp( app );
+		window.__editor = editor;
+		const frame = app.frame.bind( app );
+		app.frame = ( dt, t ) => { editor.update( dt, t ); frame( dt, t ); };
+		app.start();
+		return;
+
+	}
 	app.ui = new AppUI( app, ui );
 	ui.setLoading( 1, 'Ready' );
 	await ui.hideLoader();

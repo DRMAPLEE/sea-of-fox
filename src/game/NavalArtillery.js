@@ -1,4 +1,4 @@
-import { Color, Group, Mesh, SphereGeometry, TorusGeometry, Vector3 } from '../engine/index.js';
+import { Color, Group, Mesh, Quaternion, SphereGeometry, TorusGeometry, Vector3 } from '../engine/index.js';
 import { Material } from '../engine/render/Material.js';
 import { loadStaticGLTF } from '../engine/loaders/StaticGLTF.js';
 import { LAYERS } from '../core/SceneRenderer.js';
@@ -23,6 +23,19 @@ const _up = new Vector3( 0, 1, 0 );
 const _look = new Vector3();
 const _cameraWant = new Vector3();
 const _cameraTarget = new Vector3();
+const _followCenter = new Vector3();
+const _followVelocity = new Vector3();
+const _followDirection = new Vector3();
+const _shellNext = new Vector3();
+const _shellImpact = new Vector3();
+const _rayDirection = new Vector3();
+const _collisionSample = new Vector3();
+const _localStart = new Vector3();
+const _localEnd = new Vector3();
+const _localProbe = new Vector3();
+const _meshStart = new Vector3();
+const _meshEnd = new Vector3();
+const _inverseBoat = new Quaternion();
 
 export function ballisticVelocity( origin, target, flightTime, out = new Vector3() ) {
 
@@ -102,10 +115,17 @@ export class NavalArtillery {
 		this.range = 650;
 		this.pattern = 'circle';
 		this.viewMode = 'overhead';
+		this.followEnabled = false;
 		this.reload = 0;
 		this.salvo = [];
 		this.shells = [];
 		this.explosions = [];
+		this._salvoId = 0;
+		this._followSalvo = 0;
+		this._followImpactTimer = 0;
+		this._followImpact = new Vector3();
+		this._followHeading = new Vector3( 0, 0, 1 );
+		this._baseFov = null;
 		this._lmb = false;
 		this._hud = null;
 		this._projectileTemplate = null;
@@ -221,6 +241,9 @@ export class NavalArtillery {
 		this.viewMode = 'overhead';
 		this.active = true;
 		this._cameraReady = false;
+		this._followSalvo = 0;
+		this._followImpactTimer = 0;
+		this._baseFov = this.camera.fov;
 		this._lmb = !! this.input.mouseDown;
 		player.mode = 'cannon';
 		player.boat = this.boat;
@@ -238,8 +261,17 @@ export class NavalArtillery {
 		if ( ! this.active || ! this.player ) return;
 		const player = this.player;
 		this.active = false;
+		this._followSalvo = 0;
+		this._followImpactTimer = 0;
 		this.guide.visible = false;
 		this._showHUD( false );
+		if ( this._baseFov !== null ) {
+
+			this.camera.fov = this._baseFov;
+			this.camera.updateProjectionMatrix();
+			this._baseFov = null;
+
+		}
 		player.mode = 'deck';
 		player.deckYaw = this.side > 0 ? - Math.PI / 2 : Math.PI / 2;
 		player.pitch = - 0.05;
@@ -251,6 +283,7 @@ export class NavalArtillery {
 	update( dt ) {
 
 		this.reload = Math.max( 0, this.reload - dt );
+		this._followImpactTimer = Math.max( 0, this._followImpactTimer - dt );
 		this._updateQueued( dt );
 		this._updateShells( dt );
 		this._updateExplosions( dt );
@@ -281,11 +314,23 @@ export class NavalArtillery {
 			this.app.ui?.ui?.toast( this.viewMode === 'overhead' ? '船体上空火控视角' : '甲板炮组视角', 950 );
 
 		}
+		if ( inp.hit( 'KeyG' ) ) {
+
+			this.followEnabled = ! this.followEnabled;
+			if ( ! this.followEnabled ) {
+
+				this._followSalvo = 0;
+				this._followImpactTimer = 0;
+
+			}
+			this.app.ui?.ui?.toast( this.followEnabled ? '逐波跟弹镜头：开启' : '逐波跟弹镜头：关闭', 1100 );
+
+		}
 
 		const lmb = !! inp.mouseDown && inp.enabled;
 		if ( lmb && ! this._lmb ) this.fireSalvo();
 		this._lmb = lmb;
-		player.prompt = { key: 'E', text: '退出炮位   ·   V 切视角   ·   鼠标 瞄准   ·   左键 齐射' };
+		player.prompt = { key: 'E', text: '退出炮位   ·   右键 聚焦   ·   G 跟弹   ·   左键 齐射' };
 
 		this._aimPoint( _target );
 		this._updateGuide( _target );
@@ -299,6 +344,7 @@ export class NavalArtillery {
 		// Projectiles keep flying after the player leaves the station.
 		if ( this.active ) return;
 		this.reload = Math.max( 0, this.reload - dt );
+		this._followImpactTimer = Math.max( 0, this._followImpactTimer - dt );
 		this._updateQueued( dt );
 		this._updateShells( dt );
 		this._updateExplosions( dt );
@@ -361,14 +407,31 @@ export class NavalArtillery {
 
 	_updateCamera( dt, aimPoint ) {
 
+		if ( this._updateFollowCamera( dt ) ) {
+
+			this.guide.visible = false;
+			this._setFov( dt, this._baseFov ?? this.camera.fov );
+			this.boat.toWorld( new Vector3( this.side * 3.4, 2.95, - 14.8 ), this.player.position );
+			return;
+
+		}
+		this.guide.visible = true;
 		broadsideDirection( this.side, this.angle, this.boat.quaternion, _direction );
 		const scale = this.boat.model.cameraScale || 1;
+		const focusHeld = !! this.input.rightDown && this.input.enabled;
 		this.boat.toWorld( new Vector3( 0, this.boat.model.cameraTargetY || 10, 0 ), _cameraTarget );
 		if ( this.viewMode === 'gun' ) {
 
 			// Eye point immediately inboard of the selected battery: the player is standing beside
 			// the guns and looking along their current traverse direction.
 			this.boat.toWorld( new Vector3( this.side * 2.65, 6.65, - 14.7 ), _cameraWant );
+
+		} else if ( focusHeld ) {
+
+			// Artillery-map focus: keep the red damage radius and its immediate surroundings large
+			// enough to read even when the selected range is close to 2 km.
+			const focusHeight = Math.max( 80, Math.min( 330, this.range * 0.17 ) );
+			_cameraWant.copy( aimPoint ).addScaledVector( _up, focusHeight ).addScaledVector( _direction, - focusHeight * 0.12 );
 
 		} else {
 
@@ -390,6 +453,10 @@ export class NavalArtillery {
 			_look.copy( this.camera.position ).addScaledVector( _direction, 320 );
 			_look.y -= 7;
 
+		} else if ( focusHeld ) {
+
+			_look.copy( aimPoint );
+
 		} else {
 
 			_look.copy( _cameraTarget ).lerp( aimPoint, 0.5 );
@@ -397,7 +464,66 @@ export class NavalArtillery {
 
 		}
 		this.camera.lookAt( _look );
+		const zoomFov = Math.max( 22, ( this._baseFov ?? this.camera.fov ) * 0.48 );
+		this._setFov( dt, this.viewMode === 'gun' && focusHeld ? zoomFov : ( this._baseFov ?? this.camera.fov ) );
 		this.boat.toWorld( new Vector3( this.side * 3.4, 2.95, - 14.8 ), this.player.position );
+
+	}
+
+	_updateFollowCamera( dt ) {
+
+		if ( ! this.followEnabled || ! this._followSalvo ) return false;
+		_followCenter.set( 0, 0, 0 );
+		_followVelocity.set( 0, 0, 0 );
+		let count = 0;
+		for ( const shell of this.shells ) if ( shell.salvoId === this._followSalvo ) {
+
+			_followCenter.add( shell.position );
+			_followVelocity.add( shell.velocity );
+			count ++;
+
+		}
+		if ( count ) {
+
+			_followCenter.multiplyScalar( 1 / count );
+			_followVelocity.multiplyScalar( 1 / count );
+			_followDirection.set( _followVelocity.x, 0, _followVelocity.z );
+			if ( _followDirection.lengthSq() > 0.001 ) this._followHeading.copy( _followDirection.normalize() );
+			_cameraWant.copy( _followCenter ).addScaledVector( this._followHeading, - 20 ).addScaledVector( _up, 9 );
+			_look.copy( _followCenter ).addScaledVector( _followVelocity.normalize(), 7 );
+
+		} else if ( this._followImpactTimer > 0 ) {
+
+			_cameraWant.copy( this._followImpact ).addScaledVector( this._followHeading, - 24 ).addScaledVector( _up, 12 );
+			_look.copy( this._followImpact ).addScaledVector( _up, 3 );
+
+		} else {
+
+			const queued = this.salvo.some( ( shot ) => shot.salvoId === this._followSalvo );
+			if ( queued ) return false;
+			this._followSalvo = 0;
+			return false;
+
+		}
+		if ( ! this._cameraReady ) {
+
+			this.player.camPos.copy( _cameraWant );
+			this._cameraReady = true;
+
+		}
+		this.player.camPos.lerp( _cameraWant, 1 - Math.exp( - dt * 7.5 ) );
+		this.camera.position.copy( this.player.camPos );
+		this.camera.lookAt( _look );
+		return true;
+
+	}
+
+	_setFov( dt, target ) {
+
+		const next = this.camera.fov + ( target - this.camera.fov ) * ( 1 - Math.exp( - dt * 10 ) );
+		if ( Math.abs( next - this.camera.fov ) < 0.001 ) return;
+		this.camera.fov = next;
+		this.camera.updateProjectionMatrix();
 
 	}
 
@@ -411,6 +537,7 @@ export class NavalArtillery {
 		}
 		const guns = this.cannons.filter( ( cannon ) => ( cannon.side === 'port' ? 1 : - 1 ) === this.side );
 		if ( ! guns.length ) return false;
+		const salvoId = ++ this._salvoId;
 		const centre = this._aimPoint( new Vector3() ).clone();
 		broadsideDirection( this.side, this.angle, this.boat.quaternion, _forward );
 		_right.set( - _forward.z, 0, _forward.x );
@@ -426,7 +553,13 @@ export class NavalArtillery {
 
 			} else target.addScaledVector( _right, ( i - ( guns.length - 1 ) / 2 ) * LINE_SPACING );
 			target.y = this._impactHeight( target );
-			this.salvo.push( { gun: guns[ i ], target, delay: i * 0.11 } );
+			this.salvo.push( { gun: guns[ i ], target, delay: i * 0.11, salvoId } );
+
+		}
+		if ( this.followEnabled ) {
+
+			this._followSalvo = salvoId;
+			this._followImpactTimer = 0;
 
 		}
 		this.reload = RELOAD_SECONDS;
@@ -442,14 +575,14 @@ export class NavalArtillery {
 			const shot = this.salvo[ i ];
 			shot.delay -= dt;
 			if ( shot.delay > 0 ) continue;
-			this._spawnShell( shot.gun, shot.target );
+			this._spawnShell( shot.gun, shot.target, shot.salvoId );
 			this.salvo.splice( i, 1 );
 
 		}
 
 	}
 
-	_spawnShell( gun, target ) {
+	_spawnShell( gun, target, salvoId ) {
 
 		if ( gun.muzzle ) gun.muzzle.getWorldPosition( _origin );
 		else this.boat.toWorld( gun.group.position, _origin );
@@ -470,7 +603,7 @@ export class NavalArtillery {
 		root.scale.setScalar( 1 );
 		this.scene.add( root );
 		const voice = this.app.audio?.artilleryFlight( origin ) || null;
-		this.shells.push( { root, position: origin, velocity, age: 0, flightTime, target: target.clone(), voice } );
+		this.shells.push( { root, position: origin, velocity, age: 0, flightTime, target: target.clone(), voice, salvoId } );
 		gun.fire( this.app.spray, !! this.app.audio && ! this.app.audio.muted );
 
 	}
@@ -480,24 +613,168 @@ export class NavalArtillery {
 		for ( let i = this.shells.length - 1; i >= 0; i -- ) {
 
 			const shell = this.shells[ i ];
-			shell.age += dt;
-			if ( shell.age >= shell.flightTime ) {
+			const step = Math.min( dt, Math.max( 0, shell.flightTime - shell.age ) );
+			shell.age += step;
+			shell.velocity.y -= GRAVITY * step;
+			_shellNext.copy( shell.position ).addScaledVector( shell.velocity, step );
+			if ( this._projectileCollision( shell.position, _shellNext, _shellImpact ) ) {
 
-				this._explode( shell.target );
-				this.app.audio?.stopArtilleryVoice( shell.voice );
-				shell.root.removeFromParent();
-				this.shells.splice( i, 1 );
+				this._finishShell( shell, i, _shellImpact );
 				continue;
 
 			}
-			shell.velocity.y -= GRAVITY * dt;
-			shell.position.addScaledVector( shell.velocity, dt );
+			if ( shell.age >= shell.flightTime - 1e-5 ) {
+
+				this._finishShell( shell, i, shell.target );
+				continue;
+
+			}
+			shell.position.copy( _shellNext );
 			shell.root.position.copy( shell.position );
 			_look.copy( shell.position ).add( shell.velocity );
 			shell.root.lookAt( _look );
 			this.app.audio?.moveArtilleryVoice( shell.voice, shell.position );
 
 		}
+
+	}
+
+	_finishShell( shell, index, point ) {
+
+		this._explode( point );
+		if ( shell.salvoId === this._followSalvo ) {
+
+			this._followImpact.copy( point );
+			_followDirection.set( shell.velocity.x, 0, shell.velocity.z );
+			if ( _followDirection.lengthSq() > 0.001 ) this._followHeading.copy( _followDirection.normalize() );
+			this._followImpactTimer = 0.9;
+
+		}
+		this.app.audio?.stopArtilleryVoice( shell.voice );
+		shell.root.removeFromParent();
+		this.shells.splice( index, 1 );
+
+	}
+
+	_projectileCollision( start, end, out ) {
+
+		const length = _rayDirection.subVectors( end, start ).length();
+		if ( length <= 1e-7 ) return false;
+		_rayDirection.multiplyScalar( 1 / length );
+		let bestT = this._terrainCollisionT( start, end );
+		const staticDistance = this.app.colliders?.raycast( start, _rayDirection, length, 0.25 ) ?? length;
+		if ( staticDistance < length ) bestT = Math.min( bestT, staticDistance / length );
+		for ( const boat of this.app.boatCtls || [] ) {
+
+			if ( boat === this.boat ) continue;
+			bestT = Math.min( bestT, this._boatCollisionT( boat, start, end ) );
+
+		}
+		if ( ! Number.isFinite( bestT ) ) return false;
+		out.copy( start ).lerp( end, Math.max( 0, Math.min( 1, bestT ) ) );
+		return true;
+
+	}
+
+	_terrainCollisionT( start, end ) {
+
+		const terrain = this.app.terrainData;
+		if ( ! terrain ) return Infinity;
+		const distance = start.distanceTo( end );
+		const samples = Math.max( 1, Math.min( 64, Math.ceil( distance ) ) );
+		const clearanceAt = ( t ) => {
+
+			_collisionSample.copy( start ).lerp( end, t );
+			const terrainY = terrain.heightAt( _collisionSample.x, _collisionSample.z );
+			const surface = Math.max( 0.3, Number.isFinite( terrainY ) ? terrainY : - Infinity );
+			return _collisionSample.y - surface - 0.25;
+
+		};
+		let previousT = 0;
+		if ( clearanceAt( 0 ) <= 0 ) return 0;
+		for ( let i = 1; i <= samples; i ++ ) {
+
+			const t = i / samples;
+			if ( clearanceAt( t ) > 0 ) { previousT = t; continue; }
+			let lo = previousT, hi = t;
+			for ( let n = 0; n < 9; n ++ ) {
+
+				const mid = ( lo + hi ) * 0.5;
+				if ( clearanceAt( mid ) <= 0 ) hi = mid;
+				else lo = mid;
+
+			}
+			return hi;
+
+		}
+		return Infinity;
+
+	}
+
+	_boatCollisionT( boat, start, end ) {
+
+		const model = boat.model;
+		if ( ! model ) return Infinity;
+		_inverseBoat.copy( boat.quaternion ).invert();
+		_localStart.copy( start ).sub( boat.position ).applyQuaternion( _inverseBoat );
+		_localEnd.copy( end ).sub( boat.position ).applyQuaternion( _inverseBoat );
+		const collider = model.meshCollider;
+		if ( collider ) {
+
+			if ( ! this._meshSegmentHit( collider, _localStart, _localEnd ) ) return Infinity;
+			let lo = 0, hi = 1;
+			for ( let i = 0; i < 8; i ++ ) {
+
+				const mid = ( lo + hi ) * 0.5;
+				_localProbe.copy( _localStart ).lerp( _localEnd, mid );
+				if ( this._meshSegmentHit( collider, _localStart, _localProbe ) ) hi = mid;
+				else lo = mid;
+
+			}
+			return hi;
+
+		}
+		let best = Infinity;
+		for ( const box of model.colliders || [] ) {
+
+			if ( box.solid === false || ! box.center || ! box.half ) continue;
+			best = Math.min( best, this._segmentBoxT( _localStart, _localEnd, box.center, box.half, 0.25 ) );
+
+		}
+		return best;
+
+	}
+
+	_meshSegmentHit( collider, start, end ) {
+
+		_meshStart.copy( start );
+		_meshEnd.copy( end );
+		return collider.resolveSegment( _meshStart, _meshEnd, 0.25, { iterations: 1 } ).hit;
+
+	}
+
+	_segmentBoxT( start, end, center, half, pad ) {
+
+		let tMin = 0, tMax = 1;
+		for ( const axis of [ 'x', 'y', 'z' ] ) {
+
+			const origin = start[ axis ] - center[ axis ];
+			const delta = end[ axis ] - start[ axis ];
+			const extent = half[ axis ] + pad;
+			if ( Math.abs( delta ) < 1e-9 ) {
+
+				if ( Math.abs( origin ) > extent ) return Infinity;
+				continue;
+
+			}
+			let a = ( - extent - origin ) / delta, b = ( extent - origin ) / delta;
+			if ( a > b ) { const swap = a; a = b; b = swap; }
+			tMin = Math.max( tMin, a );
+			tMax = Math.min( tMax, b );
+			if ( tMin > tMax ) return Infinity;
+
+		}
+		return tMin >= 0 && tMin <= 1 ? tMin : Infinity;
 
 	}
 
@@ -605,12 +882,13 @@ export class NavalArtillery {
 		document.head.append( style );
 		const hud = document.createElement( 'div' );
 		hud.className = 'na-hud';
-		hud.innerHTML = `<div class="na-readout"><span class="na-side"></span><span class="na-range"></span><span class="na-range-meter"><span class="na-range-limits"><i>100 m</i><i>2 km</i></span><span class="na-range-track"><i></i></span></span><span class="na-mode"></span></div><div class="na-reload"><span></span><em class="na-bar"><i></i></em></div><div class="na-help">鼠标水平　调整炮向 ±50°<br><b>鼠标上下</b>　调整 100 m–2 km<br><b>V</b>　上空 / 炮组视角<br><b>左键</b>　整舷齐射<br><b>Q</b>　圆形 / 横排<br><b>E</b>　退出炮位</div>`;
+		hud.innerHTML = `<div class="na-readout"><span class="na-side"></span><span class="na-range"></span><span class="na-range-meter"><span class="na-range-limits"><i>100 m</i><i>2 km</i></span><span class="na-range-track"><i></i></span></span><span class="na-mode"></span><span class="na-follow"></span></div><div class="na-reload"><span></span><em class="na-bar"><i></i></em></div><div class="na-help">鼠标水平　调整炮向 ±50°<br><b>鼠标上下</b>　调整 100 m–2 km<br><b>按住右键</b>　聚焦落点 / 镜头放大<br><b>V</b>　上空 / 炮组视角<br><b>G</b>　开启 / 关闭逐波跟弹<br><b>左键</b>　整舷齐射<br><b>Q</b>　圆形 / 横排<br><b>E</b>　退出炮位</div>`;
 		( this.app.ui?.ui?.hud || document.getElementById( 'app' ) || document.body ).append( hud );
 		this._hud = hud;
 		this._hudSide = hud.querySelector( '.na-side' );
 		this._hudRange = hud.querySelector( '.na-range' );
 		this._hudMode = hud.querySelector( '.na-mode' );
+		this._hudFollow = hud.querySelector( '.na-follow' );
 		this._hudRangeBar = hud.querySelector( '.na-range-track i' );
 		this._hudReload = hud.querySelector( '.na-reload span' );
 		this._hudBar = hud.querySelector( '.na-bar i' );
@@ -632,6 +910,8 @@ export class NavalArtillery {
 		this._hudRange.textContent = `${ Math.round( this.range ) } m`;
 		this._hudRangeBar.style.transform = `scaleX(${ ( this.range - MIN_RANGE ) / ( MAX_RANGE - MIN_RANGE ) })`;
 		this._hudMode.textContent = this.pattern === 'circle' ? '○ 圆形散布' : '━ 横排散布';
+		this._hudFollow.textContent = this.followEnabled ? '跟弹 开' : '跟弹 关';
+		this._hudFollow.style.color = this.followEnabled ? '#ffe083' : 'rgba(223,249,255,.55)';
 		this._hudReload.textContent = this.reload > 0 ? `装填中 · ${ this.reload.toFixed( 1 ) } s` : '火炮就绪';
 		this._hudBar.style.transform = `scaleX(${ 1 - this.reload / RELOAD_SECONDS })`;
 

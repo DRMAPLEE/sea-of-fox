@@ -61,6 +61,11 @@ export class TerrainData {
 		this.seagrass = new Uint8Array( n ); // seagrass meadows on the shallow seabed (1.5 - 12 m deep)
 		this.rubble = new Uint8Array( n ); // dark coral rubble / rock heads on the seabed
 		this.scarp = new Uint8Array( n ); // face of the eroded embankment behind the bay beach
+		// Authorable biome overrides. Zero preserves the procedural classification; painted values
+		// force open meadow, forest floor/canopy, or snow cover respectively.
+		this.meadow = new Uint8Array( n );
+		this.forest = new Uint8Array( n );
+		this.snow = new Uint8Array( n );
 		this.rockSites = []; // outcrops / stacks for the rock scatter: { x, z, r, h, kind }
 		this.pads = []; // building pads flattened by the village (trampled ground in the splat map)
 		this.paths = PATHS;

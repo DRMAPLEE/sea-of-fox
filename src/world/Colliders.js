@@ -8,7 +8,13 @@ export class Colliders {
 
 		this.boxes = [];
 		this.cylinders = [];
+		this.meshes = [];
 		this._v = new THREE.Vector3();
+		this._a = new THREE.Vector3();
+		this._b = new THREE.Vector3();
+		this._world = new THREE.Vector3();
+		this._before = new THREE.Vector3();
+		this._inverse = new THREE.Matrix4();
 
 	}
 
@@ -35,6 +41,14 @@ export class Colliders {
 
 	}
 
+	addMesh( collider, object, { walkable = true, solid = true, tag = '' } = {} ) {
+
+		const value = { collider, object, walkable, solid, tag };
+		this.meshes.push( value );
+		return value;
+
+	}
+
 	_toLocal( b, x, z ) {
 
 		const dx = x - b.center.x, dz = z - b.center.z;
@@ -58,6 +72,18 @@ export class Colliders {
 			if ( Math.abs( x - b.center.x ) > b.radius + pad + 0.01 || Math.abs( z - b.center.z ) > b.radius + pad + 0.01 ) continue;
 			const [ lx, lz ] = this._toLocal( b, x, z );
 			if ( Math.abs( lx ) <= b.half.x + pad && Math.abs( lz ) <= b.half.z + pad ) best = Math.max( best, b.top );
+
+		}
+		for ( const m of this.meshes ) {
+
+			if ( ! m.walkable ) continue;
+			m.object.updateWorldMatrix( true, false );
+			this._inverse.copy( m.object.matrixWorld ).invert();
+			this._a.set( x, maxY, z ).applyMatrix4( this._inverse );
+			const localY = m.collider.groundHeightAt( this._a.x, this._a.z, this._a.y );
+			if ( ! Number.isFinite( localY ) ) continue;
+			this._world.set( this._a.x, localY, this._a.z ).applyMatrix4( m.object.matrixWorld );
+			if ( this._world.y <= maxY + 1e-4 ) best = Math.max( best, this._world.y );
 
 		}
 
@@ -114,13 +140,32 @@ export class Colliders {
 			hit = true;
 
 		}
+		for ( const m of this.meshes ) {
+
+			if ( ! m.solid ) continue;
+			m.object.updateWorldMatrix( true, false );
+			const matrix = m.object.matrixWorld;
+			const scale = matrix.getMaxScaleOnAxis() || 1;
+			this._inverse.copy( matrix ).invert();
+			this._a.set( pos.x, pos.y + radius, pos.z ).applyMatrix4( this._inverse );
+			this._b.set( pos.x, pos.y + Math.max( radius, height - radius ), pos.z ).applyMatrix4( this._inverse );
+			this._before.copy( this._a );
+			const contact = m.collider.resolveSegment( this._a, this._b, radius / scale, { iterations: 5 } );
+			if ( ! contact.hit ) continue;
+			this._a.applyMatrix4( matrix );
+			this._before.applyMatrix4( matrix );
+			pos.add( this._a.sub( this._before ) );
+			hit = true;
+
+		}
 
 		return hit;
 
 	}
 
-	// Segment/ray against boxes (XZ-plane rotated) for camera occlusion; returns distance or Infinity.
-	raycast( origin, dir, maxDist ) {
+	// Segment/ray against solid boxes and cylinders; returns the nearest distance, or maxDist when
+	// unobstructed. `dir` is expected to be normalized.
+	raycast( origin, dir, maxDist, pad = 0 ) {
 
 		let best = maxDist;
 		for ( const b of this.boxes ) {
@@ -141,7 +186,58 @@ export class Colliders {
 
 			};
 
-			if ( slab( lox, ldx, b.half.x ) && slab( oy, dir.y, b.half.y ) && slab( loz, ldz, b.half.z ) ) best = Math.min( best, tmin );
+			if ( slab( lox, ldx, b.half.x + pad ) && slab( oy, dir.y, b.half.y + pad ) && slab( loz, ldz, b.half.z + pad ) ) best = Math.min( best, tmin );
+
+		}
+		for ( const c of this.cylinders ) {
+
+			const ox = origin.x - c.x, oz = origin.z - c.z;
+			const radius = c.radius + pad, yMin = c.yMin - pad, yMax = c.yMax + pad;
+			if ( ox * ox + oz * oz <= radius * radius && origin.y >= yMin && origin.y <= yMax ) {
+
+				best = 0;
+				continue;
+
+			}
+			const a = dir.x * dir.x + dir.z * dir.z;
+			if ( a > 1e-10 ) {
+
+				const b = 2 * ( ox * dir.x + oz * dir.z );
+				const cc = ox * ox + oz * oz - radius * radius;
+				const disc = b * b - 4 * a * cc;
+				if ( disc >= 0 ) {
+
+					const root = Math.sqrt( disc );
+					const t0 = ( - b - root ) / ( 2 * a ), t1 = ( - b + root ) / ( 2 * a );
+					for ( const t of [ t0, t1 ] ) if ( t >= 0 && t < best ) {
+
+						const y = origin.y + dir.y * t;
+						if ( y >= yMin && y <= yMax ) best = t;
+
+					}
+
+				}
+
+			}
+			if ( Math.abs( dir.y ) > 1e-10 ) for ( const y of [ yMin, yMax ] ) {
+
+				const t = ( y - origin.y ) / dir.y;
+				if ( t < 0 || t >= best ) continue;
+				const x = ox + dir.x * t, z = oz + dir.z * t;
+				if ( x * x + z * z <= radius * radius ) best = t;
+
+			}
+
+		}
+		for ( const m of this.meshes ) {
+
+			if ( ! m.solid ) continue;
+			m.object.updateWorldMatrix( true, false );
+			this._inverse.copy( m.object.matrixWorld ).invert();
+			this._a.copy( origin ).applyMatrix4( this._inverse );
+			this._b.copy( origin ).addScaledVector( dir, best ).applyMatrix4( this._inverse );
+			const t = m.collider.raycastSegment( this._a, this._b );
+			if ( Number.isFinite( t ) ) best *= t;
 
 		}
 

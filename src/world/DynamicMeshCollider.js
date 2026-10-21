@@ -327,4 +327,28 @@ export class DynamicMeshCollider {
 
 	}
 
+	// Exact first hit along a finite segment. Returns a normalized segment parameter (0..1), or
+	// Infinity when unobstructed; this keeps the collider useful for editor-authored static meshes.
+	raycastSegment( start, end ) {
+
+		const s = this._scratch, a = s[ 0 ], b = s[ 1 ], c = s[ 2 ], hit = s[ 3 ];
+		const e1 = s[ 4 ], e2 = s[ 5 ], dir = s[ 6 ], cross = s[ 7 ], offset = s[ 8 ];
+		const length = start.distanceTo( end );
+		if ( length <= EPS ) return Infinity;
+		let best = Infinity;
+		this._query(
+			Math.min( start.x, end.x ), Math.min( start.y, end.y ), Math.min( start.z, end.z ),
+			Math.max( start.x, end.x ), Math.max( start.y, end.y ), Math.max( start.z, end.z ),
+			( tri ) => {
+
+				this._triangle( tri, a, b, c );
+				if ( ! segmentTriangleIntersection( start, end, a, b, c, hit, e1, e2, dir, cross, offset ) ) return;
+				best = Math.min( best, start.distanceTo( hit ) / length );
+
+			},
+		);
+		return best;
+
+	}
+
 }

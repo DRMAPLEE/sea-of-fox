@@ -179,6 +179,7 @@ const TERRAIN_SURFACE = /* wgsl */`
 	let nr = terrainNormalRock( xz );
 	let N0 = normalize( vec3f( nr.x, sqrt( max( 1.0 - nr.x * nr.x - nr.y * nr.y, 0.0025 ) ), nr.y ) );
 	let sp = terrainSplat( xz );
+	let biome = terrainBiome( xz );
 	let slope = 1.0 - N0.y;
 	let camDist = length( frame.cameraPos - p );
 	let dpx = dpdx( p ); let dpy = dpdy( p );
@@ -341,7 +342,12 @@ const TERRAIN_SURFACE = /* wgsl */`
 			* ( 1.0 - smoothstep( 50.0, 220.0, camDist ) * 0.85 );
 		// forest on the higher / steeper ground and in the gullies, tall-grass meadow on the valley
 		// floor and around the village (same classification as the vegetation's land cover)
-		let jungleW = sat( smoothstep( 9.0, 24.0, h + ( mcr - 0.5 ) * 18.0 ) + smoothstep( 0.18, 0.36, slope ) + gully * 0.6 );
+		var jungleW = sat( smoothstep( 9.0, 24.0, h + ( mcr - 0.5 ) * 18.0 ) + smoothstep( 0.18, 0.36, slope ) + gully * 0.6 );
+		// Red forces open meadow, green forces forest. Both are authored overrides layered over the
+		// procedural tropical classification, so an untouched map keeps its original appearance.
+		jungleW = sat( jungleW * ( 1.0 - biome.x ) + biome.y );
+		let snowW = smoothstep( 0.04, 0.82, biome.z + ( dM.w - 0.5 ) * 0.22 + ( dN.z - 0.5 ) * 0.12 )
+			* landW * smoothstep( 0.08, 0.34, N0.y );
 		// landslide scars: raw red-brown laterite in streaks down steep slopes, rare
 		let lateriteW = smoothstep( 0.62, 0.74, scar + ( macroB - 0.5 ) * 0.3 ) * smoothstep( 0.3, 0.42, slope )
 			* smoothstep( 0.52, 0.66, mcr ) * notRock * 0.85;
@@ -503,7 +509,7 @@ const TERRAIN_SURFACE = /* wgsl */`
 		dirt = mix( dirt, lawn, creep * 0.8 );
 
 		// ---- combine
-		let meadowW = ( 1.0 - jungleW ) * ( 1.0 - pathW ) * notRock * ( 1.0 - sandW ) * landW * ( 1.0 - screeW );
+		let meadowW = ( 1.0 - jungleW ) * ( 1.0 - pathW ) * notRock * ( 1.0 - sandW ) * landW * ( 1.0 - screeW ) * ( 1.0 - snowW );
 		terMeadowW = meadowW;
 		var albedo = mix( ground, dirt, pathW );
 		albedo = mix( albedo, sand, max( sandW, underW * notRock ) );
@@ -577,6 +583,12 @@ const TERRAIN_SURFACE = /* wgsl */`
 		var residue = sat( wetFoam.y ) * landW * notRock;
 		if ( residue > 0.0 ) { residue *= smoothstep( 0.42, 0.18, terDetail( ${ rot2( 'xz', 0.4 ) } / 0.9 ).x ) * 0.7 + 0.3; }
 		albedo = mix( albedo, ${ S( 0.88, 0.9, 0.9 ) }, residue );
+		// Painted snow keeps a cold blue-grey base in cavities and a warmer sun-facing crust. The
+		// two detail scales break up the edge and stop broad painted areas reading as flat white.
+		let snowGrain = dF.z * 0.55 + dN.w * 0.45;
+		var snow = mix( ${ S( 0.68, 0.76, 0.79 ) }, ${ S( 0.94, 0.95, 0.91 ) }, smoothstep( 0.28, 0.72, snowGrain + N0.y * 0.18 ) );
+		snow *= 0.94 + dM.w * 0.1;
+		albedo = mix( albedo, snow, snowW );
 
 		// ---- roughness
 		var rough = mix( 0.88, 0.93, sandW );
@@ -587,6 +599,7 @@ const TERRAIN_SURFACE = /* wgsl */`
 		rough = mix( rough, 0.7, residue );
 		rough = mix( rough, 0.75, underW );
 		rough = mix( rough, 0.94, scarpW );
+		rough = mix( rough, 0.82, snowW );
 		outRough = rough;
 
 		// ---- micro relief for the normal
@@ -605,6 +618,7 @@ const TERRAIN_SURFACE = /* wgsl */`
 		hd = mix( hd, sandH + seabedH, max( sandW, underW * notRock ) );
 		hd = mix( hd, rockHd, rockW );
 		hd = mix( hd, scarpH, scarpW );
+		hd = mix( hd, dF.z * 0.012 + dN.w * 0.035 + dM.w * 0.08, snowW );
 		hdOut = hd;
 
 		// ---- ambient occlusion: baked horizon + cavity, plus litter / crevices / seagrass canopy

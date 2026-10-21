@@ -125,6 +125,7 @@ export class VegSite {
 	// bilinear sample of a terrain mask array (Float32 0..1 or Uint8 0..255)
 	_mask( arr, x, z, scale = 1 ) {
 
+		if ( ! arr ) return 0;
 		const t = this.terrain;
 		const fx = ( x - t.origin ) / t.texel - 0.5, fz = ( z - t.origin ) / t.texel - 0.5;
 		if ( fx < 0 || fz < 0 || fx >= t.res - 1 || fz >= t.res - 1 ) return 0;
@@ -187,10 +188,15 @@ export class VegSite {
 		const mA = this.detail( ax / 173, az / 173, 3 ), mB = this.detail( bx / 47, bz / 47, 3 );
 		const macro = mA * 0.6 + mB * 0.4;
 		const gully = this._mask( t.gully, x, z, 1 / 255 ) * smoothstep( - 0.5, 0.5, h );
-		const forest = clamp( smoothstep( 9, 24, h + ( macro - 0.5 ) * 18 ) + smoothstep( 0.18, 0.36, slope ) + gully * 0.6, 0, 1 );
+		const meadowPaint = this._mask( t.meadow, x, z, 1 / 255 );
+		const forestPaint = this._mask( t.forest, x, z, 1 / 255 );
+		const snow = this._mask( t.snow, x, z, 1 / 255 );
+		const autoForest = clamp( smoothstep( 9, 24, h + ( macro - 0.5 ) * 18 ) + smoothstep( 0.18, 0.36, slope ) + gully * 0.6, 0, 1 );
+		const forest = clamp( autoForest * ( 1 - meadowPaint ) + forestPaint, 0, 1 );
 		const rock = this.rock( x, z );
 		out.h = h; out.ny = ny; out.slope = slope; out.macro = macro; out.mA = mA; out.mB = mB;
 		out.gully = gully; out.forest = forest; out.rock = rock;
+		out.meadowPaint = meadowPaint; out.forestPaint = forestPaint; out.snow = snow;
 		out.bare = Math.max( rock * 1.4, smoothstep( 0.42, 0.55, slope ) ); // > 0.5: bare rock face
 		out.sand = this._mask( t.sand, x, z, 1 / 255 );
 		out.path = this._mask( t.path, x, z, 1 / 255 );
@@ -203,7 +209,7 @@ export class VegSite {
 	// Common exclusion test; returns true if a plant of radius `clear` may stand at (x, z).
 	allowed( x, z, c, { minH = RULES.minHeight, maxBare = 0.35, clear = 0, big = false, maxSand = 0.5, maxPath = 0.3 } = {} ) {
 
-		if ( c.h < minH || c.bare > maxBare || c.sand > maxSand || c.path > maxPath ) return false;
+		if ( c.h < minH || c.bare > maxBare || c.sand > maxSand || c.path > maxPath || c.snow > 0.18 ) return false;
 		// nothing rooted on the embankment face
 		if ( c.scarp > 0.3 ) return false;
 		if ( this.spawnDist( x, z ) < RULES.spawnClear + clear ) return false;
@@ -659,7 +665,7 @@ export function buildGrassMask( site ) {
 			if ( t.heightAt( x, z ) < 1.7 ) continue;
 			if ( site.rock( x, z ) > 0.45 ) continue;
 			site.cover( x, z, c );
-			if ( c.bare > 0.5 ) continue;
+			if ( c.bare > 0.5 || c.snow > 0.18 ) continue;
 			// exclusions (+2 m so bilinear filtering of the texels never bleeds inside)
 			const sd = site.spawnDist( x, z );
 			if ( sd < RULES.spawnClear + 2 ) continue;
@@ -672,8 +678,8 @@ export function buildGrassMask( site ) {
 
 			// tall meadow grass on the open ground, thinning into the forest; trodden near houses
 			const house = site.hasVillage ? 1 - 0.55 * ( 1 - smoothstep( 3, 9, od ) ) : ( 1 - 0.85 * ( 1 - smoothstep( RULES.villageRadius - 6, RULES.villageRadius + 4, site.villageDist( x, z ) ) ) );
-			const meadow = smoothstep( 2.5, 4.5, c.h ) * ( 1 - smoothstep( 0.45, 0.85, c.forest ) ) * ( 1 - smoothstep( 0.3, 0.7, c.sand ) ) * house
-				* ( 0.75 + 0.25 * smoothstep( - 0.4, 0.3, clump ) );
+			const meadow = Math.max( c.meadowPaint, smoothstep( 2.5, 4.5, c.h ) * ( 1 - smoothstep( 0.45, 0.85, c.forest ) ) )
+				* ( 1 - smoothstep( 0.3, 0.7, c.sand ) ) * house * ( 0.75 + 0.25 * smoothstep( - 0.4, 0.3, clump ) );
 
 			// Backshore vegetation edge (in the bay): driven by the ground height above the sea, so it
 			// follows the beach profile (and any later embankment): a lobed, noisy edge with tongues

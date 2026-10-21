@@ -2152,6 +2152,8 @@ export class UI {
 						${ row( k( 'R' ), 'Fishing rod<small>Take out / put away</small>' ) }
 						${ row( k( 'E' ), 'Use broadside guns<small>Stand beside the port or starboard battery</small>' ) }
 						${ row( mouse, 'Aim artillery<small>Horizontal traverse ±50°; vertical range 100 m–2 km</small>' ) }
+						${ row( k( 'RMB' ), 'Artillery focus<small>Focus impact area overhead; zoom beside the guns</small>' ) }
+						${ row( k( 'G' ), 'Projectile camera<small>Toggle per-salvo shell tracking until impact</small>' ) }
 						${ row( k( 'Q' ), 'Artillery pattern<small>Circle / horizontal line while aiming</small>' ) }
 						${ row( k( 'LMB' ), 'Fire artillery, cast, strike, reel<small>Context-sensitive</small>' ) }
 						${ row( k( 'RMB' ), 'Reel in an empty line' ) }

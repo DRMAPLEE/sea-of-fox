@@ -143,6 +143,14 @@ export class App {
 		// data is derived (shore field, GPU textures, meshes)
 		await progress( 0.12, 'Building the village…' );
 		this.village = new Village( { scene, terrain: this.terrainData, colliders: this.colliders } );
+		if ( qs.has( 'map' ) && ! qs.has( 'editor' ) ) {
+
+			await progress( 0.13, 'Loading the authored map…' );
+			const runtime = await import( './editor/RuntimeMap.js' );
+			this.mapDocument = await runtime.loadRuntimeMapDocument( qs.get( 'map' ) );
+			this.mapTerrainTracker = runtime.applyRuntimeTerrain( this.terrainData, this.mapDocument );
+
+		}
 		if ( ! qs.has( 'noVeg' ) ) {
 
 			await progress( 0.14, 'Planting the island…' );
@@ -165,6 +173,13 @@ export class App {
 
 		await progress( 0.23, 'Growing the reef…' );
 		this.reef = new Reef( { scene, terrain: this.terrainData, shoreField: this.shoreField } );
+		if ( this.mapDocument ) {
+
+			await progress( 0.24, 'Placing authored entities…' );
+			const { loadRuntimeEntities } = await import( './editor/RuntimeMap.js' );
+			this.mapEntities = await loadRuntimeEntities( this, this.mapDocument );
+
+		}
 
 		this.boat = new BoatModel();
 		scene.add( this.boat.group );
@@ -472,7 +487,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		// ---------------------------------------------------------------- audio
 		// recorded field recordings (public/audio, credits in public/audio/CREDITS.md); ?noAudio turns it off
-		this.audio = qs.has( 'noAudio' ) ? null : new SoundScape();
+		this.audio = qs.has( 'noAudio' ) || qs.has( 'editor' ) ? null : new SoundScape();
 		this.player.audio = this.audio;
 		// the fishing game (rod, bites, catch, cooler, fish stand)
 		this.game = new Game( this );

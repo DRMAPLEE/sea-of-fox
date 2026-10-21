@@ -113,6 +113,9 @@ Add these to the URL, for example `?fly&noAudio`:
 
 | Option | Effect |
 |---|---|
+| `editor` | Open the map workshop with terrain brushes, entity placement, collisions and map import/export |
+| `map=local` | Start the game with the map saved by the editor in this browser |
+| `map=/maps/island.tidewater-map.json` | Load an exported map from a same-origin URL |
 | `fly` | Start in the free camera |
 | `noAudio` | Disable sound |
 | `noClouds` | Skip the volumetric clouds |
@@ -128,6 +131,11 @@ npm install
 npm run dev      # http://127.0.0.1:5189
 npm run build    # static build in dist/
 ```
+
+Open `http://127.0.0.1:5189/?editor` to edit the current procedural island. Terrain edits are stored as
+compact patches over the base island; placed entities may use the built-in library or an embedded `.glb`.
+Maps can be saved to IndexedDB in the current browser or exported as `.tidewater-map.json` files.
+Use `http://127.0.0.1:5189/?map=local` to play the saved map through the normal game flow.
 
 Every push to `main` deploys to GitHub Pages through `.github/workflows/deploy.yml`.
 
