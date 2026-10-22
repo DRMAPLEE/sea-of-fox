@@ -20,10 +20,10 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async ()
 
 	if ( app.qs.has( 'editor' ) ) {
 
-		ui.setLoading( 1, 'Opening map workshop' );
+		ui.setLoading( 1, '正在打开地图工坊' );
 		await ui.hideLoader();
 		ui.dispose();
-		document.title = 'Tidewater — Map Workshop';
+		document.title = '潮汐水域 — 地图工坊';
 		const { EditorApp } = await import( './editor/EditorApp.js' );
 		const editor = new EditorApp( app );
 		window.__editor = editor;
@@ -34,8 +34,10 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async ()
 
 	}
 	app.ui = new AppUI( app, ui );
-	ui.setLoading( 1, 'Ready' );
+	ui.setLoading( 1, '准备完毕' );
 	await ui.hideLoader();
+	// Direct links to the named review cameras are useful for visual QA and art-direction reviews.
+	if ( app.qs.has( 'view' ) && window.__view ) window.__view( app.qs.get( 'view' ) );
 	// frame-time benchmark and reference shots (see core/Bench.js): it drives the frames itself
 	if ( app.qs.has( 'bench' ) ) {
 
@@ -57,6 +59,6 @@ app.init( ( p, text, until ) => ui.setLoading( p, text, until ) ).then( async ()
 } ).catch( ( e ) => {
 
 	console.error( e );
-	ui.setLoadingError( 'Something went wrong: ' + e.message );
+	ui.setLoadingError( '发生错误：' + e.message );
 
 } );

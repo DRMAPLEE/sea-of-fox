@@ -437,6 +437,26 @@ export class SkyProClouds {
 		this._prevCam = null;
 		this._prevLight = new Vector3();
 		this._lastCoverage = - 1;
+		this._stormDeck = false;
+
+	}
+
+	// A mature waterspout belongs to a low maritime storm deck.  Keep the normal preset's cloud
+	// top fixed while lowering only the base, so the particle funnel actually enters cloud rather
+	// than ending in clear sky.  This is deliberately a state change (not a per-frame animation):
+	// moving the spherical shell invalidates temporal cloud history.
+	setStormDeck( active ) {
+
+		active = !! active;
+		if ( active === this._stormDeck ) return;
+		this._stormDeck = active;
+		const normalBottom = PRESET.shape.altitude;
+		const normalTop = normalBottom + PRESET.shape.thickness;
+		const bottom = active ? 650 : normalBottom;
+		this.S.shell.value[ 0 ] = bottom;
+		this.S.shell.value[ 1 ] = normalTop - bottom;
+		this.historyValid = false;
+		this.panoWarm = true;
 
 	}
 

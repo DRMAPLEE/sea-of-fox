@@ -234,9 +234,9 @@ export class Rocks {
 
 		// ---- grid scan: shore boulders, talus, hillside outcrops, headland scatter
 		const step = 2.2;
-		for ( let z = - 880; z < 330; z += step ) {
+		for ( let z = - 900; z < 850; z += step ) {
 
-			for ( let x = - 640; x < 640; x += step ) {
+			for ( let x = - 900; x < 900; x += step ) {
 
 				const jx = x + ( rand() - 0.5 ) * step, jz = z + ( rand() - 0.5 ) * step;
 				const h = T.heightAt( jx, jz );

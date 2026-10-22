@@ -8,7 +8,7 @@ import { FishingRod } from './FishingRod.js';
 import { FishStand } from './FishStand.js';
 import { Chandlery } from './Chandlery.js';
 import { CatchDisplay } from './CatchDisplay.js';
-import { UPGRADES, fuelBurn } from './Gear.js';
+import { UPGRADES } from './Gear.js';
 import { GameHUD } from './GameHUD.js';
 import { Minimap } from './Minimap.js';
 import { Guide } from './Guide.js';
@@ -17,7 +17,7 @@ import { Guide } from './Guide.js';
 const CATCH_CARD_MS = 9000;
 
 // The fishing game on top of the world:
-//   R          take out / put away the rod (on foot, on the pier, on the boat's deck)
+//   R          toggles fishing equipment (on foot, on the pier, on the boat's deck)
 //   hold LMB   wind up, release to cast (hold longer = farther)
 //   LMB        strike when a fish takes the bobber ("!"); then hold LMB to reel, let go to ease off
 //   RMB        reel an empty line back in
@@ -37,11 +37,10 @@ export class Game {
 		this.landing = null; // { species, kg } while the caught fish swings in view
 		this.chandlery = new Chandlery( { scene: app.scene, terrain: app.terrainData, colliders: app.colliders, material: this.stand.material } );
 		this.vendors = [ this.stand.vendor, this.chandlery.vendor ];
-		// boat upgrades: engine (thrust / top speed) and deck floodlights for night fishing
-		this._engineBase = new Map( ( app.boatCtls || [ app.boatCtl ] ).map( ( b ) => [ b, { maxThrust: b.maxThrust, pitchSpeed: b.pitchSpeed } ] ) );
+		// Engine upgrades improve acceleration; every vessel shares the same 60 km/h governor.
+		this._engineBase = new Map( ( app.boatCtls || [ app.boatCtl ] ).map( ( b ) => [ b, { maxThrust: b.maxThrust } ] ) );
 		this.floods = [];
 		if ( app.localLights ) this.addFloodlights( app.localLights, app.boat );
-		this._fuelOut = false;
 		this._sonarT = 0;
 		this._sonar = null;
 		this.hud = null;
@@ -63,8 +62,8 @@ export class Game {
 		this.rod.setGear( { castM: g.castM, reelSpeed: g.reelSpeed } );
 		for ( const [ b, base ] of this._engineBase || [] ) {
 
-			b.maxThrust = base.maxThrust * g.speedMul * g.speedMul;
-			b.pitchSpeed = base.pitchSpeed * g.speedMul;
+			b.maxThrust = base.maxThrust * g.thrustMul;
+			b.maxForwardSpeed = 60 / 3.6;
 
 		}
 
@@ -108,20 +107,6 @@ export class Game {
 
 	}
 
-	refuel() {
-
-		const l = this.state.refuel();
-		if ( l > 0 ) {
-
-			this._fuelOut = false;
-			this.toast( `Filled up · ${ l.toFixed( 0 ) } L` );
-
-		}
-
-		return l;
-
-	}
-
 	toast( text, ms = 2600 ) {
 
 		if ( this.hud ) this.hud.toast( text, ms );
@@ -153,11 +138,13 @@ export class Game {
 		}
 
 		const can = this.canFish;
+		if ( this.minimap && inp.hit( 'KeyM' ) ) this.minimap.toggleFull();
+		if ( this.minimap?.isFull && inp.hit( 'Escape' ) ) this.minimap.toggleFull( false );
 		if ( inp.hit( 'KeyR' ) && can && ! this.fight ) {
 
 			rod.equip( ! rod.equipped );
 			if ( ! rod.equipped ) this.cancelLine();
-			this.toast( rod.equipped ? 'Rod out · hold left mouse to cast' : 'Rod away', 1600 );
+			this.toast( rod.equipped ? '鱼竿已就绪' : '已收起鱼竿', 1200 );
 
 		}
 
@@ -268,7 +255,6 @@ export class Game {
 		// the catch card's live fish portrait (or one queued thumbnail)
 		if ( this.hud && this.hud.portrait ) this.hud.portrait.update( dt );
 		if ( this.hud ) this.hud.update( {
-			fuel: aboard ? { litres: this.state.fuelL, tank: this.state.stats.fuelL } : null,
 			sonar: aboard && this.state.stats.finder ? this._sonar : null,
 			fight: this.fight,
 			casting: rod.state === 'windup',
@@ -283,29 +269,28 @@ export class Game {
 
 	prompt() {
 
-		const rod = this.rod, p = this.app.player;
+		const rod = this.rod;
 		if ( ! rod.equipped ) {
 
-			// by the water (boat deck, pier, the wet beach, wading): suggest the rod
-			const byWater = p.mode === 'deck' || ( p.mode === 'walk' && [ 'wood', 'wetsand', 'water' ].includes( p.surface ) );
-			return byWater ? { key: 'R', text: 'Take out the rod' } : null;
+			// Equipping is an explicit player choice; contextual UI stays quiet until fishing is active.
+			return null;
 
 		}
 
 		const b = this.bite;
 		switch ( rod.state ) {
 
-			case 'idle': return { key: 'LMB', text: 'Hold to wind up, release to cast   ·   R  put the rod away' };
-			case 'windup': return { key: 'LMB', text: 'Release to cast (hold longer to cast farther)' };
+			case 'idle': return { key: '鼠标左键', text: '按住蓄力，松开抛竿   ·   R  收起鱼竿' };
+			case 'windup': return { key: '鼠标左键', text: '松开抛竿（按得越久，抛得越远）' };
 			case 'flying': return null;
 			case 'floating':
-				if ( b && b.phase === 'take' ) return { key: 'LMB', text: 'Strike now!' };
-				if ( b && b.phase === 'nibble' ) return { key: '…', text: 'Something\'s nibbling · wait until the bobber is pulled under' };
+				if ( b && b.phase === 'take' ) return { key: '鼠标左键', text: '立即扬竿！' };
+				if ( b && b.phase === 'nibble' ) return { key: '…', text: '鱼儿正在轻咬 · 等浮漂被完全拽入水下' };
 				return { key: 'RMB', text: 'Waiting for a bite · right-click to reel the line in' };
-			case 'retrieving': return { key: 'RMB', text: 'Reeling in' };
+			case 'retrieving': return { key: '鼠标右键', text: '正在收线' };
 			case 'fighting': return this.fight && this.fight.tension > this.fight.band[ 1 ]
-				? { key: 'LMB', text: 'Too much tension · let go!' }
-				: { key: 'LMB', text: 'Hold to reel · let go when the tension goes red' };
+				? { key: '鼠标左键', text: '张力过大 · 快松手！' }
+				: { key: '鼠标左键', text: '按住收线 · 张力变红时松手' };
 			case 'landing': return null;
 			default: return null;
 
@@ -313,23 +298,10 @@ export class Game {
 
 	}
 
-	// fuel burn at the helm (the engine stops when the tank is dry) and the fish finder
+	// Fish finder refresh while aboard. Propulsion has no consumable fuel limit.
 	updateBoat( dt ) {
 
 		const app = this.app, p = app.player, b = p.boat || app.boatCtl, s = this.state;
-		if ( b.driven ) {
-
-			const left = s.burn( fuelBurn( b.rpm ) * dt );
-			if ( left <= 0 ) {
-
-				b.throttle = 0;
-				if ( ! this._fuelOut ) this.toast( 'Out of fuel · buy diesel at the chandlery by the boathouse', 4000 );
-				this._fuelOut = true;
-
-			}
-
-		} else if ( this._wasDriven ) s.save();
-		this._wasDriven = b.driven;
 
 		if ( ( p.mode === 'boat' || p.mode === 'deck' ) && s.stats.finder ) {
 
@@ -419,7 +391,7 @@ export class Game {
 
 		if ( where !== 'water' ) {
 
-			this.toast( 'Landed on the sand', 1400 );
+			this.toast( '鱼钩落在沙滩上', 1400 );
 			return;
 
 		}
@@ -475,7 +447,7 @@ export class Game {
 
 		} else if ( b.phase === 'take' ) {
 
-			this.toast( 'It took the bait and ran', 1800 );
+			this.toast( '鱼儿咬饵逃窜了', 1800 );
 			this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour ) };
 
 		}
@@ -488,7 +460,7 @@ export class Game {
 		if ( ! b || b.phase === 'wait' || b.phase === 'nibble' ) {
 
 			// too early: a nibbling fish isn't hooked yet; it keeps nibbling (a hint, no penalty)
-			if ( b && b.phase === 'nibble' ) this.toast( 'Not yet · wait for it to pull under', 1500 );
+			if ( b && b.phase === 'nibble' ) this.toast( '还不到时候 · 等它把浮漂拽入水下', 1500 );
 			return;
 
 		}
@@ -497,7 +469,7 @@ export class Game {
 		this.fight = new CatchMinigame( { species: b.species, kg: b.kg, lineKg: g.lineKg, reelSpeed: g.reelSpeed, distance: Math.max( 3, this.rod.lineOut ) } );
 		this.bite = null;
 		this.rod.hook();
-		this.toast( 'Fish on!', 1200 );
+		this.toast( '上鱼了！', 1200 );
 
 	}
 
@@ -523,7 +495,7 @@ export class Game {
 			if ( this.hud ) this.landing = { species: f.species, kg: f.kg, card: info, cardT: 0 };
 			else {
 
-				if ( entry ) this.toast( `${ info.record ? 'New record! ' : '' }${ name } · ${ entry.kg.toFixed( 2 ) } kg · $${ entry.value }`, 3600 );
+				if ( entry ) this.toast( `${ info.record ? '新纪录！' : '' }${ name } · ${ entry.kg.toFixed( 2 ) } 千克 · $${ entry.value }`, 3600 );
 				else this.toast( `${ name } · ${ f.kg.toFixed( 1 ) } kg · no room in the ${ this.state.upgrades.hold > 0 ? 'hold' : 'cooler' }, let it go`, 3600 );
 				this.landing = { species: f.species, kg: f.kg };
 
@@ -533,13 +505,13 @@ export class Game {
 
 		} else if ( st === 'snapped' ) {
 
-			this.toast( 'Snap! The line broke', 2400 );
+			this.toast( '啪！鱼线断了', 2400 );
 			if ( au && au.lineSnap ) au.lineSnap();
 			this.rod.setState( 'idle' );
 
 		} else {
 
-			this.toast( 'It threw the hook', 2000 );
+			this.toast( '鱼儿脱钩了', 2000 );
 			this.rod.endFight();
 
 		}
@@ -559,7 +531,7 @@ export class Game {
 	// line in at once (mode change)
 	cancelLine( silent = false ) {
 
-		if ( this.fight && ! silent ) this.toast( 'Lost it', 1400 );
+		if ( this.fight && ! silent ) this.toast( '让它跑了', 1400 );
 		this.fight = null;
 		this.bite = null;
 		if ( this.rod.state !== 'stowed' ) this.rod.setState( this.rod.equipped ? 'idle' : 'stowed' );

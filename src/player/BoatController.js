@@ -32,6 +32,9 @@ const _c4 = new THREE.Vector3();
 const _c5 = new THREE.Vector3();
 const _invQ = new THREE.Quaternion();
 const _dq = new THREE.Quaternion();
+const _waterFlow = new THREE.Vector3();
+const _airFlow = new THREE.Vector3();
+const _relativeFlow = new THREE.Vector3();
 
 // Rigid-body model of an 8.2 m, 3.2 t Downeast lobster boat (semi-displacement hull, full keel).
 //
@@ -49,12 +52,13 @@ const _dq = new THREE.Quaternion();
 // mooring lines as before.
 export class BoatController {
 
-	constructor( { model, query, terrain, colliders, dock = WORLD.boatDock } ) {
+	constructor( { model, query, terrain, colliders, dock = WORLD.boatDock, waterspouts = null } ) {
 
 		this.model = model;
 		this.query = query;
 		this.terrain = terrain;
 		this.colliders = colliders;
+		this.waterspouts = waterspouts;
 		this.dock = { position: dock.position.clone(), heading: dock.heading };
 
 		const hydro = model.hydro || {};
@@ -97,8 +101,9 @@ export class BoatController {
 		this.throttle = 0; // lever -1..1 (moves with some inertia)
 		this.steer = 0; // wheel -1..1
 		this.rpm = 0; // engine 0..1 (spools after the lever)
-		this.maxThrust = 26000; // N, bollard pull at full rpm
-		this.pitchSpeed = 16; // m/s, propeller pitch speed at full rpm (thrust -> 0 there)
+		this.maxThrust = 40000; // N, bollard pull at full rpm
+		this.pitchSpeed = 60; // m/s, high enough for the governed 60 km/h top speed
+		this.maxForwardSpeed = 60 / 3.6;
 		this.reverseFactor = 0.45; // astern thrust relative to ahead
 		this.driven = false;
 		this.moored = true;
@@ -329,6 +334,46 @@ export class BoatController {
 		this.forwardSpeed = u;
 		const aLoc = _a.copy( this.angular ).applyQuaternion( invQ ); // x pitch, y yaw, z roll rates
 
+		// ---- waterspout coupling: quadratic current drag below the waterline and wind drag above it.
+		// The surface query already supplies the violent heave/roll from the spiral waves; these forces
+		// add the missing horizontal convergence and rotation that make a vessel spiral into the core.
+		if ( this.waterspouts ) {
+
+			this.waterspouts.surfaceVelocityAt( comW, _waterFlow );
+			const currentSpeed = _waterFlow.length();
+			if ( currentSpeed > 0.05 && wetD > 0.01 ) {
+
+				_relativeFlow.copy( _waterFlow ).sub( this.velocity );
+				_relativeFlow.y = 0;
+				const relSpeed = _relativeFlow.length();
+				if ( relSpeed > 0.01 ) {
+
+					// Fd = 1/2 rho Cd A |u_rel| u_rel.  The cap limits acceleration under a badly
+					// delayed water-query frame without removing the danger near the spray ring.
+					const drag = Math.min( 0.5 * RHO * 0.9 * 5.5 * relSpeed * relSpeed * wetD, m * 15 );
+					_p.set( 0, - 0.35, this.com.z );
+					this.toWorld( _p, _p );
+					addForceAt( _f.copy( _relativeFlow ).multiplyScalar( drag / relSpeed ), _p );
+
+				}
+				// A mooring is not an immunity bubble: mature spray-ring flow parts ordinary lines.
+				if ( this.moored && currentSpeed > 5.5 ) this.moored = false;
+
+			}
+
+			_p.copy( comW ).addScaledVector( up, 2.1 );
+			this.waterspouts.velocityAt( _p, _airFlow );
+			_relativeFlow.copy( _airFlow ).sub( this.velocity );
+			const airSpeed = _relativeFlow.length();
+			if ( airSpeed > 0.1 ) {
+
+				const windDrag = Math.min( 0.5 * 1.225 * 1.05 * 14 * airSpeed * airSpeed, m * 3.5 );
+				addForceAt( _f.copy( _relativeFlow ).multiplyScalar( windDrag / airSpeed ), _p );
+
+			}
+
+		}
+
 		// ---- calm-water resistance (friction + the wave-making hump past hull speed + planing)
 		const au = Math.abs( u );
 		const R = ( 40 * au + 22 * au * au + 3000 * sstep( au, 2.8, 5.4 ) + 55 * au * au * sstep( au, 7, 11 ) ) * wetD;
@@ -368,7 +413,14 @@ export class BoatController {
 		const dir = this.driven ? Math.sign( this.throttle ) : 0;
 		const n = this.rpm * ( this.driven && Math.abs( this.throttle ) > 0.02 ? 1 : 0 );
 		let thrust = 0;
-		if ( dir > 0 ) thrust = this.maxThrust * n * n * Math.max( 0, 1 - Math.max( u, 0 ) / ( this.pitchSpeed * Math.max( n, 0.2 ) ) );
+		if ( dir > 0 ) {
+
+			thrust = this.maxThrust * n * n * Math.max( 0, 1 - Math.max( u, 0 ) / ( this.pitchSpeed * Math.max( n, 0.2 ) ) );
+			// Ease into the 60 km/h governor instead of repeatedly striking a hard limit every physics
+			// sub-step.  This also keeps spray and wake emission stable at full throttle.
+			thrust *= 1 - sstep( u, this.maxForwardSpeed - 1.5, this.maxForwardSpeed );
+
+		}
 		else if ( dir < 0 ) thrust = - this.reverseFactor * this.maxThrust * n * n * Math.max( 0, 1 - Math.max( - u, 0 ) / ( this.pitchSpeed * 0.6 * Math.max( n, 0.2 ) ) );
 		thrust *= propWet;
 		this.thrust = thrust;
@@ -426,6 +478,17 @@ export class BoatController {
 		fl.y /= m * ( 1 + this.addedMass.y * wetD );
 		fl.z /= m * ( 1 + this.addedMass.z * wetD );
 		this.velocity.addScaledVector( fl.applyQuaternion( this.quaternion ), h );
+		// Cap only velocity along the level heading.  Clamping boat-local Z used to rotate the capped
+		// vector with every pitch/roll change, injecting and removing vertical velocity at 120 Hz; at
+		// high speed that showed up as the whole vessel flickering against the water.
+		_v.copy( fwd ).setY( 0 );
+		if ( _v.lengthSq() > 1e-8 ) {
+
+			_v.normalize();
+			const levelForwardSpeed = this.velocity.dot( _v );
+			if ( levelForwardSpeed > this.maxForwardSpeed ) this.velocity.addScaledVector( _v, this.maxForwardSpeed - levelForwardSpeed );
+
+		}
 		const tl = T.applyQuaternion( invQ );
 		const I = this.inertia, ai = this.addedInertia;
 		tl.set( tl.x / ( I.x * ( 1 + ai.x * wetD ) ), tl.y / ( I.y * ( 1 + ai.y * wetD ) ), tl.z / ( I.z * ( 1 + ai.z * wetD ) ) );

@@ -50,4 +50,7 @@ export const BANK = {
 	coins: { file: 'coins.ogg', slices: [ [ 0.08, 1.604 ] ], lufs: [ -16.5 ] },
 	artillery_flight: { file: 'artillery-flight.mp3', slices: [ [ 0, 5.424 ] ], lufs: [ -18 ] },
 	artillery_explosion: { file: 'artillery-explosion.mp3', slices: [ [ 0, 6.0865 ] ], lufs: [ -15 ] },
+	storm_wind: { file: 'storm-wind.mp3', loop: true, lufs: -18 },
+	storm_rain: { file: 'storm-rain.mp3', loop: true, lufs: -18 },
+	storm_bgm: { file: 'storm-bgm.mp3', loop: true, lufs: -18 },
 };

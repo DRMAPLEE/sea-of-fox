@@ -4,6 +4,9 @@ import { ShaderModule } from '../../engine/gpu/Shader.js';
 import { Material } from '../../engine/render/Material.js';
 import { mulberry32 } from '../../util/Noise.js';
 import { vegModule, uCamPos, C, f } from './VegNodes.js';
+import { grassDensityForCover } from './Scatter.js';
+import { ARCHIPELAGO } from '../Archipelago.js';
+import { WORLD } from '../WorldLayout.js';
 
 // Camera-following ground flora: tall meadow grass (knee to waist high), dune grass, sea oats and
 // beach creeper.
@@ -24,15 +27,17 @@ import { vegModule, uCamPos, C, f } from './VegNodes.js';
 // ground equally at every distance (constant blade density x width).
 
 export const CELL = 8;
-export const R_NEAR = 18;
-export const R_MID = 46;
-export const R_FAR = 88;
-export const FADE_T2 = [ 11, 17 ];
-export const FADE_T1 = [ 36, 45 ];
-export const FADE_T0 = [ 62, 87 ]; // tier 0 blades drop out at random distances in this range
-const MAX_NEAR = 48;
-const MAX_MID = 160;
-const MAX_FAR = 420;
+export const R_NEAR = 30;
+export const R_MID = 90;
+// Grass is resident for every island inside the same 4 km world render range. Distance now changes
+// blade complexity only; it no longer acts as a small camera-following loading radius.
+export const R_FAR = WORLD.renderRadius;
+export const FADE_T2 = [ 22, 29 ];
+export const FADE_T1 = [ 72, 89 ];
+export const FADE_T0 = [ 3800, 3990 ];
+const MAX_NEAR = 96;
+const MAX_MID = 640;
+const MAX_FAR = 65536;
 const CLUMPS = 384; // meadow / dune clump slots per cell (6 per m^2)
 const BLADES = 7; // per clump
 const BLADE_TIER = [ 0, 0, 1, 1, 2, 2, 2 ];
@@ -272,13 +277,19 @@ function buildPatch( level, clumps, seed = 7 ) {
 	const rows = [ [ 0, 0.3, 0.62, 1 ], [ 0, 0.55, 1 ], [ 0, 1 ] ][ level ];
 	const maxTier = 2 - level;
 
-	for ( const c of clumps ) {
+	for ( let ci = 0; ci < clumps.length; ci ++ ) {
 
+		// The full-island far layer is always resident. Past 90 m an individual blade is below a
+		// pixel, so retain a stable eighth of the blue-noise clumps and let the terrain's matching
+		// sward shading provide the mass underneath. This keeps the whole island grassy without
+		// spending millions of duplicate sub-pixel triangles on distant turf.
+		if ( level === 2 && ci % 8 !== 0 ) continue;
+		const c = clumps[ ci ];
 		const slot = [ c.x, c.z, c.slotRand, 0 ];
 		for ( const bl of c.blades ) {
 
 			if ( bl.tier > maxTier ) continue;
-			b.blade( slot, KIND.GRASS, rows, 0.012, bl.dx, bl.dz, bl.lean, bl.h, bl.curve, bl.rnd, bl.base, bl.tier );
+			b.blade( slot, KIND.GRASS, rows, level === 2 ? 0.024 : 0.012, bl.dx, bl.dz, bl.lean, bl.h, bl.curve, bl.rnd, bl.base, bl.tier );
 
 		}
 
@@ -399,9 +410,12 @@ function buildPatch( level, clumps, seed = 7 ) {
 
 export class GrassField {
 
-	constructor( { terrain, mask } ) {
+	constructor( { terrain, mask, site } ) {
 
 		this.terrain = terrain;
+		this.site = site;
+		this._islandCells = new Map();
+		this.homeCells = [];
 		const res = terrain.res;
 		const maskData = mask.data, mres = mask.res;
 
@@ -445,6 +459,7 @@ export class GrassField {
 				const c = cj * cellsPerSide + ci;
 				this.cellFlags[ c ] = any;
 				if ( ! any ) continue;
+				this.homeCells.push( { i: ci, j: cj, c } );
 				const hi0 = Math.max( 0, Math.floor( ci * hpc ) - 1 ), hi1 = Math.min( res - 1, Math.ceil( ( ci + 1 ) * hpc ) + 1 );
 				const hj0 = Math.max( 0, Math.floor( cj * hpc ) - 1 ), hj1 = Math.min( res - 1, Math.ceil( ( cj + 1 ) * hpc ) + 1 );
 				for ( let j = hj0; j <= hj1; j ++ ) for ( let i = hi0; i <= hi1; i ++ ) {
@@ -509,9 +524,13 @@ export class GrassField {
 	_createMesh( geometry, max, name ) {
 
 		const arr = new Float32Array( max * 4 );
+		const remoteArr = new Float32Array( max * 4 );
 		const attr = new THREE.InstancedBufferAttribute( arr, 4 );
+		const remoteAttr = new THREE.InstancedBufferAttribute( remoteArr, 4 );
 		attr.setUsage( THREE.DynamicDrawUsage );
+		remoteAttr.setUsage( THREE.DynamicDrawUsage );
 		geometry.setAttribute( 'iCell', attr );
+		geometry.setAttribute( 'iRemote', remoteAttr );
 		geometry.instanceCount = 0;
 		const mesh = new THREE.Mesh( geometry, this.material );
 		mesh.name = name;
@@ -519,13 +538,79 @@ export class GrassField {
 		mesh.castShadow = false;
 		mesh.receiveShadow = true;
 		mesh.matrixAutoUpdate = false;
-		return { mesh, geometry, attr, arr, max, count: 0 };
+		return { mesh, geometry, attr, arr, remoteAttr, remoteArr, max, count: 0 };
 
 	}
 
 	_createMaterial() {
 
 		return createGrassMaterial( this );
+
+	}
+
+	_remoteCell( i, j ) {
+
+		const x0 = i * CELL, z0 = j * CELL, x = x0 + CELL * 0.5, z = z0 + CELL * 0.5;
+		const c = this.site.cover( x, z, {} );
+		const density = grassDensityForCover( c );
+		let cell = null;
+		// grassDensityForCover already fades grass through the shared bare-rock/slope mask. The old
+		// extra ny > 0.78 gate removed healthy turf from almost every moderate Faroe slope, making a
+		// restored mountainous island look vegetation-free while only its flattest valley survived.
+		if ( density > 0.035 ) {
+
+			const e = 2;
+			const gx = ( this.terrain.heightAt( x + e, z ) - this.terrain.heightAt( x - e, z ) ) / ( 2 * e );
+			const gz = ( this.terrain.heightAt( x, z + e ) - this.terrain.heightAt( x, z - e ) ) / ( 2 * e );
+			const rise = ( Math.abs( gx ) + Math.abs( gz ) ) * CELL * 0.5 + 0.5;
+			cell = { x0, z0, h: c.h, gx, gz, density, minY: c.h - rise, maxY: c.h + rise };
+
+		}
+		return cell;
+
+	}
+
+	// Build a satellite's complete grass field in one operation. It stays resident thereafter; the
+	// camera never grows a ring of cells around itself while the player walks across the island.
+	_islandGrassCells( index ) {
+
+		if ( this._islandCells.has( index ) ) return this._islandCells.get( index );
+		const island = ARCHIPELAGO[ index ];
+		const cells = [];
+		if ( island && island.climate !== 'polar' ) {
+
+			const pad = 40;
+			const i0 = Math.floor( ( island.x - island.rx - pad ) / CELL );
+			const i1 = Math.floor( ( island.x + island.rx + pad ) / CELL );
+			const j0 = Math.floor( ( island.z - island.rz - pad ) / CELL );
+			const j1 = Math.floor( ( island.z + island.rz + pad ) / CELL );
+			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
+
+				const cell = this._remoteCell( i, j );
+				if ( cell ) cells.push( cell );
+
+			}
+
+		}
+		this._islandCells.set( index, cells );
+		return cells;
+
+	}
+
+	_writeCell( level, count, x0, z0, remote = null ) {
+
+		level.arr[ count * 4 ] = x0;
+		level.arr[ count * 4 + 1 ] = z0;
+		level.arr[ count * 4 + 2 ] = 0;
+		level.arr[ count * 4 + 3 ] = remote ? 1 : 0;
+		if ( remote ) {
+
+			level.remoteArr[ count * 4 ] = remote.h;
+			level.remoteArr[ count * 4 + 1 ] = remote.gx;
+			level.remoteArr[ count * 4 + 2 ] = remote.gz;
+			level.remoteArr[ count * 4 + 3 ] = remote.density;
+
+		} else level.remoteArr.fill( 0, count * 4, count * 4 + 4 );
 
 	}
 
@@ -546,50 +631,42 @@ export class GrassField {
 		this._mat.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
 		this._frustum.setFromProjectionMatrix( this._mat, camera.coordinateSystem, camera.reversedDepth );
 
-		const cx = e[ 12 ], cy = e[ 13 ], cz = e[ 14 ];
+		const cx = e[ 12 ], cz = e[ 14 ];
 		const t = this.terrain;
-		const n = this.cellsPerSide;
-		const i0 = Math.max( 0, Math.floor( ( cx - R_FAR - t.origin ) / CELL ) ), i1 = Math.min( n - 1, Math.floor( ( cx + R_FAR - t.origin ) / CELL ) );
-		const j0 = Math.max( 0, Math.floor( ( cz - R_FAR - t.origin ) / CELL ) ), j1 = Math.min( n - 1, Math.floor( ( cz + R_FAR - t.origin ) / CELL ) );
 		const [ near, mid, far ] = this.levels;
 		let nc = 0, mc = 0, fc = 0;
+		const addVisible = ( x0, z0, minY, maxY, remote = null ) => {
 
-		for ( let j = j0; j <= j1; j ++ ) {
+			const dx = Math.max( x0 - cx, 0, cx - x0 - CELL );
+			const dz = Math.max( z0 - cz, 0, cz - z0 - CELL );
+			const d = Math.hypot( dx, dz );
+			this._box.min.set( x0, minY, z0 );
+			this._box.max.set( x0 + CELL, maxY + 1.8, z0 + CELL );
+			if ( ! this._frustum.intersectsBox( this._box ) ) return;
+			if ( d < R_NEAR && nc < near.max ) this._writeCell( near, nc ++, x0, z0, remote );
+			else if ( d < R_MID && mc < mid.max ) this._writeCell( mid, mc ++, x0, z0, remote );
+			else if ( fc < far.max ) this._writeCell( far, fc ++, x0, z0, remote );
 
-			for ( let i = i0; i <= i1; i ++ ) {
+		};
 
-				const c = j * n + i;
-				if ( ! this.cellFlags[ c ] ) continue;
-				const x0 = t.origin + i * CELL, z0 = t.origin + j * CELL;
-				// nearest point of the cell (horizontal, like the shader's LOD distance)
-				const dx = Math.max( x0 - cx, 0, cx - x0 - CELL );
-				const dz = Math.max( z0 - cz, 0, cz - z0 - CELL );
-				const d = Math.hypot( dx, dz );
-				if ( d > R_FAR ) continue;
-				this._box.min.set( x0, this.cellMinY[ c ] - 0.5, z0 );
-				this._box.max.set( x0 + CELL, this.cellMaxY[ c ] + 1.8, z0 + CELL );
-				if ( ! this._frustum.intersectsBox( this._box ) ) continue;
-				if ( d < R_NEAR && nc < near.max ) {
+		// The authored island's complete occupancy list was built at construction time. Only skip it
+		// when the whole 2 km tile is outside the world render radius.
+		const homeDx = Math.max( t.origin - cx, 0, cx + t.origin );
+		const homeDz = Math.max( t.origin - cz, 0, cz + t.origin );
+		if ( Math.hypot( homeDx, homeDz ) <= R_FAR ) for ( const cell of this.homeCells ) {
 
-					near.arr[ nc * 4 ] = x0;
-					near.arr[ nc * 4 + 1 ] = z0;
-					nc ++;
+			const x0 = t.origin + cell.i * CELL, z0 = t.origin + cell.j * CELL;
+			addVisible( x0, z0, this.cellMinY[ cell.c ] - 0.5, this.cellMaxY[ cell.c ] );
 
-				} else if ( d < R_MID && mc < mid.max ) {
+		}
 
-					mid.arr[ mc * 4 ] = x0;
-					mid.arr[ mc * 4 + 1 ] = z0;
-					mc ++;
+		// A satellite becomes resident as one complete island when it enters the 4 km terrain range.
+		// Subsequent movement only changes geometric LOD and frustum visibility, never cell presence.
+		if ( this.site ) for ( let index = 1; index < ARCHIPELAGO.length; index ++ ) {
 
-				} else if ( d >= R_MID && fc < far.max ) {
-
-					far.arr[ fc * 4 ] = x0;
-					far.arr[ fc * 4 + 1 ] = z0;
-					fc ++;
-
-				}
-
-			}
+			const island = ARCHIPELAGO[ index ];
+			if ( island.climate === 'polar' || Math.hypot( island.x - cx, island.z - cz ) > R_FAR + Math.max( island.rx, island.rz ) ) continue;
+			for ( const cell of this._islandGrassCells( index ) ) addVisible( cell.x0, cell.z0, cell.minY, cell.maxY, cell );
 
 		}
 
@@ -600,6 +677,9 @@ export class GrassField {
 			lvl.attr.clearUpdateRanges();
 			lvl.attr.addUpdateRange( 0, Math.max( 1, count ) * 4 );
 			lvl.attr.needsUpdate = true;
+			lvl.remoteAttr.clearUpdateRanges();
+			lvl.remoteAttr.addUpdateRange( 0, Math.max( 1, count ) * 4 );
+			lvl.remoteAttr.needsUpdate = true;
 
 		}
 
@@ -708,7 +788,7 @@ function createGrassMaterial( field ) {
 			grassHeights: field.heightTex,
 			grassMask: field.maskTex,
 		},
-		attributes: { iCell: 'vec4f', aSlot: 'vec4f', aBlade: 'vec4f', aSide: 'vec4f' },
+		attributes: { iCell: 'vec4f', iRemote: 'vec4f', aSlot: 'vec4f', aBlade: 'vec4f', aSide: 'vec4f' },
 		varyings: {
 			vVegGrass: 'vec4f', // hf, kind, dune fraction, rand
 			vVegGrassTone: 'vec4f', // meadow tone (shared with the terrain), dryness
@@ -729,7 +809,9 @@ function createGrassMaterial( field ) {
 	let kind = blade.y;
 	let bRnd = blade.z;
 
-	let m = textureSampleLevel( grassMask, smpLinearClamp, ( xz - ${ f( t.origin ) } ) / ${ f( t.size ) }, 0.0 );
+	var m = textureSampleLevel( grassMask, smpLinearClamp, ( xz - ${ f( t.origin ) } ) / ${ f( t.size ) }, 0.0 );
+	let isRemote = v.iCell.w > 0.5;
+	if ( isRemote ) { m = vec4f( 0.0, v.iRemote.w, 0.0, 0.0 ); }
 	let isGrass = kind < 0.5;
 	let isOat = kind > 0.5 && kind < 2.5;
 	let lush = m.g;
@@ -773,7 +855,7 @@ function createGrassMaterial( field ) {
 	// oats and creeper simply shrink out
 	let widthK = select( 1.0, comp * own, isGrass );
 	let sizeK = select( own, 1.0, isGrass );
-	let scale = hScale * present * sizeK;
+	let scale = hScale * present * sizeK * vegBlastKeep( xz );
 
 	// per-slot random yaw
 	let yaw = vegHash12( xz * 0.73 + 3.3 ) * 6.2832;
@@ -788,7 +870,11 @@ function createGrassMaterial( field ) {
 	let hb = textureLoad( grassHeights, ij + vec2i( 1, 0 ), 0 ).x;
 	let hc = textureLoad( grassHeights, ij + vec2i( 0, 1 ), 0 ).x;
 	let hd = textureLoad( grassHeights, ij + vec2i( 1, 1 ), 0 ).x;
-	let ground = mix( mix( ha, hb, hfr.x ), mix( hc, hd, hfr.x ), hfr.y );
+	var ground = mix( mix( ha, hb, hfr.x ), mix( hc, hd, hfr.x ), hfr.y );
+	if ( isRemote ) {
+		let local = slot.xy - vec2f( ${ f( CELL * 0.5 ) } );
+		ground = v.iRemote.x + v.iRemote.y * local.x + v.iRemote.z * local.y;
+	}
 	let base = vec3f( xz.x, ground - 0.03, xz.y );
 	let pl = vec3f( P.x * spread, P.y, P.z * spread );
 	let o0 = vec3f( pl.x * cy - pl.z * sy, pl.y, pl.x * sy + pl.z * cy ) * scale;

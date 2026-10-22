@@ -1,6 +1,7 @@
 import * as THREE from '../../engine/index.js';
 import { Noise2D, mulberry32, smoothstep, clamp } from '../../util/Noise.js';
 import { WORLD } from '../WorldLayout.js';
+import { ARCHIPELAGO, sampleSatelliteIslands, satelliteBareRockMask } from '../Archipelago.js';
 import { getDetailTexture } from '../terrain/DetailTextures.js';
 
 // CPU-side vegetation placement: land cover, exclusion zones and per-type scattering.
@@ -52,6 +53,7 @@ export class VegSite {
 		this.noise = new Noise2D( seed );
 		this.noise2 = new Noise2D( seed * 7 + 3 );
 		this.n = new THREE.Vector3();
+		this.satellite = { island: 0, islandD: Infinity, islandQ: Infinity };
 		this.village = WORLD.village.center;
 		this.spawn = WORLD.spawn.position;
 		this.detail = detailSampler();
@@ -190,15 +192,38 @@ export class VegSite {
 		const gully = this._mask( t.gully, x, z, 1 / 255 ) * smoothstep( - 0.5, 0.5, h );
 		const meadowPaint = this._mask( t.meadow, x, z, 1 / 255 );
 		const forestPaint = this._mask( t.forest, x, z, 1 / 255 );
-		const snow = this._mask( t.snow, x, z, 1 / 255 );
+		let snow = this._mask( t.snow, x, z, 1 / 255 );
+		let climate = 0, remoteKind = null, remoteIsland = null;
+		if ( x < t.origin || z < t.origin || x >= - t.origin || z >= - t.origin ) {
+
+			sampleSatelliteIslands( x, z, this.satellite );
+			remoteIsland = ARCHIPELAGO[ this.satellite.island ] || null;
+			remoteKind = remoteIsland?.kind || null;
+			if ( remoteIsland?.climate === 'polar' ) {
+
+				climate = 1;
+				// Polar strand transitions directly from frozen black sand to ice/snow: no tundra plants.
+				snow = h > 3.4 ? 1 : 0;
+
+			} else if ( remoteIsland?.climate === 'temperate' ) climate = 0.55;
+
+		}
 		const autoForest = clamp( smoothstep( 9, 24, h + ( macro - 0.5 ) * 18 ) + smoothstep( 0.18, 0.36, slope ) + gully * 0.6, 0, 1 );
-		const forest = clamp( autoForest * ( 1 - meadowPaint ) + forestPaint, 0, 1 );
-		const rock = this.rock( x, z );
+		let forest = clamp( autoForest * ( 1 - meadowPaint ) + forestPaint, 0, 1 );
+		if ( climate > 0.4 ) forest *= climate > 0.8 ? 0 : 0.08;
+		let rock = this.rock( x, z );
+		if ( remoteKind ) rock = Math.max( rock, satelliteBareRockMask( x, z, this.satellite.islandQ, this.satellite.island ) );
 		out.h = h; out.ny = ny; out.slope = slope; out.macro = macro; out.mA = mA; out.mB = mB;
 		out.gully = gully; out.forest = forest; out.rock = rock;
-		out.meadowPaint = meadowPaint; out.forestPaint = forestPaint; out.snow = snow;
+		out.meadowPaint = meadowPaint; out.forestPaint = forestPaint; out.snow = snow; out.climate = climate;
 		out.bare = Math.max( rock * 1.4, smoothstep( 0.42, 0.55, slope ) ); // > 0.5: bare rock face
 		out.sand = this._mask( t.sand, x, z, 1 / 255 );
+		if ( remoteKind ) {
+
+			let beachTop = remoteKind === 'glacial' ? 3.6 : ( climate > 0.4 ? 2.8 : ( remoteKind === 'atoll' ? 3.8 : 5.2 ) );
+			out.sand = h < 0 ? 1 : 1 - smoothstep( 1.2, beachTop, h );
+
+		}
 		out.path = this._mask( t.path, x, z, 1 / 255 );
 		// the eroded embankment's face (0.55 toe .. 1 lip; TerrainData._scarp)
 		out.scarp = t.scarp ? this._mask( t.scarp, x, z, 1 / 255 ) : 0;
@@ -209,7 +234,9 @@ export class VegSite {
 	// Common exclusion test; returns true if a plant of radius `clear` may stand at (x, z).
 	allowed( x, z, c, { minH = RULES.minHeight, maxBare = 0.35, clear = 0, big = false, maxSand = 0.5, maxPath = 0.3 } = {} ) {
 
-		if ( c.h < minH || c.bare > maxBare || c.sand > maxSand || c.path > maxPath || c.snow > 0.18 ) return false;
+		// The glacial island is entirely abiotic: its exposed black strand must not gain shrubs in
+		// the narrow band below the snow line. Temperate islands still only reject large plants.
+		if ( c.h < minH || c.bare > maxBare || c.sand > maxSand || c.path > maxPath || c.snow > 0.18 || c.climate > 0.8 || ( big && c.climate > 0.4 ) ) return false;
 		// nothing rooted on the embankment face
 		if ( c.scarp > 0.3 ) return false;
 		if ( this.spawnDist( x, z ) < RULES.spawnClear + clear ) return false;
@@ -314,6 +341,22 @@ function scatter( rand, x0, z0, x1, z1, step, fn ) {
 
 }
 
+// Scan the detailed home-island rectangle plus tight rectangles around the distant islands;
+// never iterate over the thousands of metres of empty ocean between them.
+function scatterArchipelago( rand, x0, z0, x1, z1, step, fn ) {
+
+	scatter( rand, x0, z0, x1, z1, step, fn );
+	for ( let i = 1; i < ARCHIPELAGO.length; i ++ ) {
+
+		const island = ARCHIPELAGO[ i ];
+		if ( island.climate === 'polar' ) continue;
+		const rx = ( island.rx || 150 ) + 35, rz = ( island.rz || 150 ) + 35;
+		scatter( rand, island.x - rx, island.z - rz, island.x + rx, island.z + rz, Math.max( step * 6, 24 ), fn );
+
+	}
+
+}
+
 // Open meadow slopes away from the village (the headlands): 0..1 weight for extra scattered trees,
 // tree clumps and scrub. Denser in the gullies and hollows, thinner on the high exposed slopes,
 // none on bare rock, the beach sand or the paths; open grassy patches are left by the noise
@@ -346,13 +389,13 @@ export function scatterVegetation( site, seed = 99 ) {
 	const TAU = Math.PI * 2;
 	const c = {};
 
-	// island bounds (land lies roughly within these); the headlands either side of the bay reach
-	// south to z ~ +320 (HZ1)
-	const X0 = - 660, X1 = 660, Z0 = - 900, Z1 = - 20, HZ1 = 320;
+	// Full archipelago bounds. Ocean cells fail the height test immediately, while the satellite
+	// islands receive the same palms, scrub and forest rules as the main island.
+	const X0 = - 900, X1 = 900, Z0 = - 900, Z1 = - 20, HZ1 = 850;
 
 	// --- broadleaf trees: a closed canopy on the forest ground (hillsides, gullies), thinning at
 	// the forest edge into scattered trees; a few lone trees on the meadow ----------------------
-	scatter( rand, X0, Z0, X1, HZ1, 4.6, ( x, z ) => {
+	scatterArchipelago( rand, X0, Z0, X1, HZ1, 4.6, ( x, z ) => {
 
 		site.cover( x, z, c );
 		if ( c.h < 3 ) return;
@@ -439,6 +482,26 @@ export function scatterVegetation( site, seed = 99 ) {
 
 	out.villagePalms = village;
 
+	// Sparse wind-bent palms make the remote islands readable from the water without filling the
+	// intervening 6+ km ocean with placement work.
+	for ( let i = 1; i < ARCHIPELAGO.length; i ++ ) {
+
+		const island = ARCHIPELAGO[ i ];
+		if ( island.climate !== 'tropical' || island.kind === 'twins' || island.kind === 'crescent' ) continue;
+		const rx = ( island.rx || 150 ) + 20, rz = ( island.rz || 150 ) + 20;
+		scatter( rand, island.x - rx, island.z - rz, island.x + rx, island.z + rz, 28, ( x, z ) => {
+
+			site.cover( x, z, c );
+			if ( c.h < 2.0 || c.h > 13 || c.ny < 0.82 || rand() > 0.2 ) return;
+			if ( ! site.allowed( x, z, c, { minH: 2, maxBare: 0.45, clear: 1.5, big: true, maxSand: 1.01 } ) ) return;
+			if ( ! occ.free( x, z, 2.2, 1 ) || ! occT.free( x, z, 1.5, 1 ) ) return;
+			occ.add( x, z, 2.2, KIND.PALM );
+			out.palms.push( beachPalm( x, z, c.h ) );
+
+		} );
+
+	}
+
 	// --- palms scattered over the valley and the forest edge (above the canopy here and there)
 	scatter( rand, X0, Z0, X1, Z1, 12, ( x, z ) => {
 
@@ -492,7 +555,7 @@ export function scatterVegetation( site, seed = 99 ) {
 
 	// --- shrubs: thickets along the forest edge and in the gullies, understory in the forest,
 	// a few clumps out on the meadow and the back of the beach -----------------------------
-	scatter( rand, X0, Z0, X1, HZ1, 3.0, ( x, z ) => {
+	scatterArchipelago( rand, X0, Z0, X1, HZ1, 3.0, ( x, z ) => {
 
 		site.cover( x, z, c );
 		if ( c.h < 2.3 ) return;
@@ -646,6 +709,16 @@ export function scatterVegetation( site, seed = 99 ) {
 // RGBA density mask over the whole terrain at 2 m (linear filtered by the grass shader):
 //   R dune grass, G tall meadow grass, B sea oats, A beach creeper. Returns { data, res }.
 export const GRASS_MASK_TEXEL = 2;
+
+// Shared meadow rule for the baked home-island mask and camera-following satellite grass.
+export function grassDensityForCover( c ) {
+
+	if ( c.climate > 0.8 || c.h < 1.7 || c.bare > 0.5 || c.snow > 0.18 ) return 0;
+	return Math.max( c.meadowPaint || 0, smoothstep( 2.5, 4.5, c.h ) * ( 1 - smoothstep( 0.45, 0.85, c.forest ) ) )
+		* ( 1 - smoothstep( 0.3, 0.7, c.sand ) ) * ( 1 - smoothstep( 0.25, 0.45, c.bare ) );
+
+}
+
 export function buildGrassMask( site ) {
 
 	const t = site.terrain;
@@ -678,8 +751,7 @@ export function buildGrassMask( site ) {
 
 			// tall meadow grass on the open ground, thinning into the forest; trodden near houses
 			const house = site.hasVillage ? 1 - 0.55 * ( 1 - smoothstep( 3, 9, od ) ) : ( 1 - 0.85 * ( 1 - smoothstep( RULES.villageRadius - 6, RULES.villageRadius + 4, site.villageDist( x, z ) ) ) );
-			const meadow = Math.max( c.meadowPaint, smoothstep( 2.5, 4.5, c.h ) * ( 1 - smoothstep( 0.45, 0.85, c.forest ) ) )
-				* ( 1 - smoothstep( 0.3, 0.7, c.sand ) ) * house * ( 0.75 + 0.25 * smoothstep( - 0.4, 0.3, clump ) );
+			const meadow = grassDensityForCover( c ) * house * ( 0.75 + 0.25 * smoothstep( - 0.4, 0.3, clump ) );
 
 			// Backshore vegetation edge (in the bay): driven by the ground height above the sea, so it
 			// follows the beach profile (and any later embankment): a lobed, noisy edge with tongues

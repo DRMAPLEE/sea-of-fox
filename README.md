@@ -27,10 +27,10 @@ breach. It runs directly on WebGPU and WGSL with its own small rendering engine,
   18 Caribbean species.
 - A line-tension fight: keep the tension in the green band, ease off when the fish runs.
 - A full-screen catch card with the fish's length and weight, a fish log with records, and a cooler.
-- Joe's fish stand buys your catch; Marta's chandlery sells line, reels, rods, a bigger hold, fuel, a rebuilt
+- Joe's fish stand buys your catch; Marta's chandlery sells line, reels, rods, a bigger hold, a rebuilt
   engine, a fish finder and deck floodlights for night fishing.
-- Walk the deck and the wheelhouse while the boat drifts; the boat burns fuel.
-- A first-play guide, contextual tips and a minimap. Progress is saved in the browser.
+- Walk the deck and the wheelhouse while the boat drifts; propulsion has no fuel limit.
+- A first-play guide, contextual tips, a 60 km looping chart, waypoints and fast travel. Progress is saved in the browser.
 
 **Ocean**
 - Four-cascade FFT ocean (Tessendorf spectra) with foam, whitecaps, wind streaks and swell.
@@ -82,14 +82,14 @@ breach. It runs directly on WebGPU and WGSL with its own small rendering engine,
 | C | Crouch / dive |
 | E | Interact: board the boat, take or leave the helm, step ashore, trade with the fish buyer or the chandlery |
 | V | Boat camera at the helm (1st / 3rd person) |
-| R | Take out / put away the fishing rod |
 | Left mouse | Hold to wind up, release to cast · strike when a fish takes the bait · hold to reel |
 | Right mouse | Reel an empty line in |
 | I or Tab | Cooler / fish hold and the fish log |
 | F | Free camera |
 | L | Flashlight |
 | T | Pause time |
-| M | Mute |
+| M | Open / close the archipelago map; click to set a waypoint, then choose Fast travel |
+| U | Mute |
 | H | Settings panel |
 | P | Photo mode |
 | F1 or ? | All controls |
@@ -101,8 +101,8 @@ to dip and strike when it's pulled under, then play the fish: keep the line tens
 ease off when it runs. Different water holds different fish (the shallows, the pier, the reef, the bay and
 deep water offshore), and some bite best at dawn, dusk or night. Sell your catch to Joe at the fish stand
 on the beach by the pier, and spend it at Marta's chandlery by the boathouse: stronger line, a faster reel,
-a longer rod, a bigger fish hold, a larger fuel tank, a rebuilt engine, a fish finder and deck floodlights for
-night fishing. The boat burns diesel at the helm; fill up at the chandlery. Progress is saved in the browser.
+a longer rod, a bigger fish hold, a rebuilt engine, a fish finder and deck floodlights for
+night fishing. Boats have unlimited fuel and a governed top speed of 60 km/h. Progress is saved in the browser.
 
 The settings panel (H) exposes the sea state, time of day, sun azimuth, clouds, haze, post-processing and
 more.

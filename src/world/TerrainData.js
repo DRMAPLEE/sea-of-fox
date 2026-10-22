@@ -1,7 +1,8 @@
 import { Noise2D, smoothstep, clamp, lerp } from '../util/Noise.js';
-import { WORLD } from './WorldLayout.js';
+import { WORLD, wrapWorldCoordinate, wrappedWorldDelta } from './WorldLayout.js';
 import { softRamp, erosionNoise, sampleGrid, upsample2, boxBlur } from './terrain/TerrainNoise.js';
 import { ridgeEnvelope, SEA_STACKS, PATHS, polylineDistance } from './terrain/IslandShape.js';
+import { ARCHIPELAGO, polarGlacierMask, sampleSatelliteIslands, satelliteBareRockMask, satelliteEscarpmentRelief, satelliteMultifractalRelief } from './Archipelago.js';
 
 const smin = ( a, b, k ) => {
 
@@ -16,6 +17,44 @@ const ellipseDist = ( x, z, cx, cz, rx, rz ) => {
 	return ( Math.sqrt( dx * dx + dz * dz ) - 1 ) * Math.min( rx, rz );
 
 };
+
+// A compact height-field approximation of a fresh shell crater. Laboratory scans of granular
+// impacts are closer to a cone with near-constant wall slope than a half ellipsoid; the harmonics
+// break the mathematically perfect rim while the low ejecta apron carries more mass downrange.
+// Keep this expression numerically matched with TerrainGPU.terrainCraterDelta().
+function craterProfileDelta( crater, dx, dz ) {
+
+	const invRadius = 1 / Math.max( crater.radius, 0.01 );
+	const oblique = crater.obliquity;
+	// Experiments place the deepest portion slightly uprange while the ejecta is biased downrange.
+	dx += crater.dirX * crater.radius * oblique * 0.055;
+	dz += crater.dirZ * crater.radius * oblique * 0.055;
+	const along = ( dx * crater.dirX + dz * crater.dirZ ) * invRadius / ( 1 + oblique * 0.13 );
+	const cross = ( - dx * crater.dirZ + dz * crater.dirX ) * invRadius / ( 1 - oblique * 0.035 );
+	const angle = Math.atan2( cross, along );
+	const downrange = Math.cos( angle );
+	const edge = 1 + Math.sin( angle * 5 + crater.phase ) * 0.055
+		+ Math.sin( angle * 9 - crater.phase * 0.73 ) * 0.03
+		+ Math.cos( angle * 13 + crater.phase * 0.37 ) * 0.018
+		+ downrange * oblique * 0.055;
+	const r = Math.hypot( along, cross ) / Math.max( edge, 0.82 );
+	if ( r >= 1.5 ) return 0;
+
+	// Excavation cavity: a softened cone ending before the rim crest, not a smooth spherical bowl.
+	const bowl = - crater.depth * Math.max( 0, 1 - r / 0.82 );
+	const rimNoise = 0.82 + 0.18 * Math.sin( angle * 7 - crater.phase * 1.31 )
+		+ 0.1 * Math.sin( angle * 11 + crater.phase * 0.41 );
+	const rim = crater.depth * 0.185 * rimNoise * smoothstep( 0.68, 0.88, r ) * ( 1 - smoothstep( 0.88, 1.09, r ) );
+	// Thin, discontinuous proximal ejecta. Its downrange bias carries the impact direction without
+	// turning the actual cavity into a cartoon ellipse.
+	const apronLobes = 0.55 + 0.45 * smoothstep( - 0.35, 0.8,
+		Math.sin( angle * 3 + crater.phase * 0.6 ) * Math.sin( angle * 5 - crater.phase ) );
+	const apronDir = 0.72 + oblique * 0.38 * Math.max( downrange, - 0.25 );
+	const apron = crater.depth * 0.042 * apronLobes * apronDir
+		* smoothstep( 0.91, 1.04, r ) * ( 1 - smoothstep( 1.04, 1.48, r ) );
+	return bowl + rim + apron;
+
+}
 
 // central bay: the beach and its underwater profile stay smooth (the surf is tuned for it)
 const beachZoneAt = ( x, z ) => ( 1 - smoothstep( 120, 205, Math.abs( x - 10 ) ) ) * ( 1 - smoothstep( 40, 140, z + 40 ) ) * smoothstep( - 260, - 120, z );
@@ -67,6 +106,7 @@ export class TerrainData {
 		this.forest = new Uint8Array( n );
 		this.snow = new Uint8Array( n );
 		this.rockSites = []; // outcrops / stacks for the rock scatter: { x, z, r, h, kind }
+		this.craters = []; // recent artillery deformation, mirrored by TerrainGPU
 		this.pads = []; // building pads flattened by the village (trampled ground in the splat map)
 		this.paths = PATHS;
 		this.timings = {};
@@ -80,6 +120,7 @@ export class TerrainData {
 	// signed coast distance (m): > 0 water, < 0 land
 	coastDistance( x, z ) {
 
+		x = wrapWorldCoordinate( x ); z = wrapWorldCoordinate( z );
 		const F = this._fields( x, z, false );
 		const beachZone = beachZoneAt( x, z );
 		return { d: this._coast( x, z, F, beachZone ), beachZone };
@@ -89,6 +130,7 @@ export class TerrainData {
 	// height before the 1 m detail pass (analytic, slow path of the grid pipeline)
 	heightFn( x, z ) {
 
+		x = wrapWorldCoordinate( x ); z = wrapWorldCoordinate( z );
 		const F = this._fields( x, z, true );
 		const o = this._base( x, z, F, this._out );
 		return { h: o.h, rock: o.rock };
@@ -136,6 +178,19 @@ export class TerrainData {
 		d += F.f170 * 34 * ( 1 - 0.9 * bz );
 		if ( bz < 1 ) d += this.noise.fbm( x / 38, z / 38, 3 ) * 7 * ( 1 - bz );
 		d += F.und * 5 * bz; // gentle beach undulation
+		// The detailed 2 km home tile cannot overlap any satellite (the nearest shore is over 10 km
+		// away). Avoid testing all 23 distant coastlines for every texel during the 2048² bake.
+		if ( Math.abs( x ) > this.size * 0.5 + 1500 || Math.abs( z ) > this.size * 0.5 + 1500 ) {
+
+			sampleSatelliteIslands( x, z, F );
+			if ( F.islandD < d ) d = F.islandD;
+			else F.island = 0;
+
+		} else {
+
+			F.island = 0; F.islandD = Infinity; F.islandQ = Infinity; F.islandFjord = 0;
+
+		}
 		return d;
 
 	}
@@ -151,7 +206,9 @@ export class TerrainData {
 		const headland = Math.max(
 			1 - smoothstep( 60, 140, Math.hypot( ( x + 272 ) * 0.9, ( z + 25 ) * 0.45 ) ),
 			1 - smoothstep( 60, 150, Math.hypot( ( x - 288 ) * 0.9, ( z + 12 ) * 0.45 ) ) );
-		const rm = Math.max( headland, 1 - bz * 1.4 );
+		const island = F.island ? ARCHIPELAGO[ F.island ] : null;
+		const satelliteRock = island?.kind === 'atoll' ? 0.04 : island?.climate === 'polar' ? 0.82 : island?.climate === 'temperate' ? 0.55 : 0.72;
+		const rm = F.island ? satelliteRock : Math.max( headland, 1 - bz * 1.4 );
 		let rock = 0;
 		if ( rm > 0.35 ) rock = smoothstep( 0.35, 0.75, clamp( rm * ( 0.55 + 0.45 * n2.fbm( x / 60, z / 60, 3 ) ), 0, 1 ) );
 
@@ -171,6 +228,13 @@ export class TerrainData {
 			const sandRipple = d < 420 ? n.fbm( x / 45, z / 45, 3 ) * 0.6 * ( 1 - smoothstep( 380, 420, d ) ) : 0;
 			const deepVar = F.deep * 6 * smoothstep( 60, 400, d );
 			h = - depth + sandRipple * smoothstep( 8, 40, d ) + deepVar;
+			if ( island?.kind === 'faroe' && F.islandFjord > 0 ) {
+
+				// A glacially overdeepened inner basin behind a shallower mouth sill.
+				const basin = F.islandFjord * smoothstep( 0.04, 0.24, 1 - F.islandQ ) * ( 1 - smoothstep( 0.78, 0.96, F.islandQ ) );
+				h -= basin * 16;
+
+			}
 
 			// rocky seabed near cliffs
 			if ( rock > 0 && d < 300 ) h += rock * n2.ridged( x / 25, z / 25, 4 ) * 5 * smoothstep( 0, 20, d ) * ( 1 - smoothstep( 120, 300, d ) );
@@ -203,9 +267,54 @@ export class TerrainData {
 
 			const dunes = e > 25 && e < 240 ? smoothstep( 25, 60, e ) * ( 1 - smoothstep( 120, 240, e ) ) * n2.fbm( x / 30, z / 30, 3 ) * 0.9 : 0;
 			h = beach + dunes;
+			// Only the generated satellite islands use this larger fantasy-scale relief. Tidewater (the
+			// player spawn island) remains entirely on its original authored height pipeline.
+			const radialCore = Math.max( 0, 1 - F.islandQ );
+			// A fjord creates a shoreline deep inside the original ellipse. Fade the plateau and
+			// mountain uplift in from that actual signed shoreline; feeding the still-large radial core
+			// directly into it made coarse LOD triangles jump from water to a full-height plateau.
+			const faroeShoreCore = island?.kind === 'faroe' ? radialCore * smoothstep( 0, 96, e ) : radialCore;
+			const reliefCore = island?.kind === 'atoll' ? Math.min( 1, e / 70 ) : faroeShoreCore;
+			const fantasyRidges = satelliteMultifractalRelief( x, z, reliefCore, F.island );
+			if ( F.island ) h = beach + fantasyRidges * 0.12;
+			const escarpments = satelliteEscarpmentRelief( x, z, reliefCore, F.island );
+			if ( island?.kind === 'atoll' ) {
+
+				// The lagoon remains navigable, but fantasy limestone fins rise from the broad reef ring.
+				h = Math.min( 4.2, h * 0.72 ) + fantasyRidges * 1.4 + escarpments;
+
+			} else if ( island?.climate === 'tropical' ) {
+
+				// Rio-like tropical relief: several granite/volcanic massifs linked by forested saddles,
+				// rather than one mathematically perfect cone.
+				const cone = Math.max( 0, 1 - F.islandQ ), v = island.variant || 0;
+				const p1 = Math.exp( - ( ( ( x - island.x + island.rx * 0.14 ) / ( island.rx * 0.34 ) ) ** 2 + ( ( z - island.z + island.rz * 0.08 ) / ( island.rz * 0.38 ) ) ** 2 ) );
+				const p2 = Math.exp( - ( ( ( x - island.x - island.rx * ( 0.26 + v % 2 * 0.05 ) ) / ( island.rx * 0.27 ) ) ** 2 + ( ( z - island.z - island.rz * 0.24 ) / ( island.rz * 0.29 ) ) ** 2 ) );
+				const p3 = Math.exp( - ( ( ( x - island.x + island.rx * 0.32 ) / ( island.rx * 0.23 ) ) ** 2 + ( ( z - island.z - island.rz * 0.27 ) / ( island.rz * 0.26 ) ) ** 2 ) );
+				h += cone * 18 + p1 * 58 + p2 * 38 + p3 * 27 + fantasyRidges + escarpments;
+
+			} else if ( island?.climate === 'temperate' ) {
+
+				// Faroe-like basalt plateaus: glacial fjords cut into steep turf-capped, stepped flanks.
+				const plateau = faroeShoreCore;
+				const lavaBenches = ( smoothstep( 0.1, 0.14, plateau ) + smoothstep( 0.34, 0.39, plateau ) * 0.8 + smoothstep( 0.62, 0.68, plateau ) * 0.55 ) * 5;
+				h += smoothstep( 0.015, 0.14, plateau ) * 17 + Math.pow( plateau, 1.22 ) * 27 + lavaBenches + fantasyRidges * 1.3 + escarpments;
+
+			} else if ( island?.climate === 'polar' ) {
+
+				// A central ice cap feeds two valley glaciers. Ice suppresses the fantasy-scale crags
+				// beneath it and adds a thick, smoother flowing surface; exposed nunataks retain the ribs.
+				const crown = Math.max( 0, 1 - F.islandQ );
+				const glacier = polarGlacierMask( x, z, F.islandQ, F.island );
+				const crags = Math.max( 0, fantasyRidges ) * 1.65;
+				h += smoothstep( 0.02, 0.16, crown ) * 12 + Math.pow( crown, 1.35 ) * 95
+					+ crags * ( 1 - glacier * 0.82 ) + escarpments * ( 1 - glacier * 0.42 )
+					+ glacier * ( 7 + crown * 11 );
+
+			}
 
 			// sea cliffs on the rocky coast
-			const cliffZone = rock * ( 1 - smoothstep( 90, 170, e ) );
+			const cliffZone = F.island ? 0 : rock * ( 1 - smoothstep( 90, 170, e ) );
 			if ( cliffZone > 0 ) {
 
 				const cliff = Math.min( e * 1.6, 18 + n2.ridged( x / 70, z / 70, 4 ) * 22 ) + n2.fbm( x / 12, z / 12, 3 ) * 2.5;
@@ -261,6 +370,13 @@ export class TerrainData {
 
 		}
 
+		if ( F.island ) {
+
+			let exposed = satelliteBareRockMask( x, z, F.islandQ, F.island );
+			if ( island?.climate === 'polar' ) exposed *= 1 - polarGlacierMask( x, z, F.islandQ, F.island ) * 0.72;
+			rock = Math.max( rock, exposed );
+
+		}
 		out.h = h; out.rock = rock; out.d = d; out.bz = bz; out.carve = carve;
 		return out;
 
@@ -422,7 +538,7 @@ export class TerrainData {
 		for ( let j = 1; j < res - 1; j ++ ) {
 
 			const z = o + j + 0.5;
-			if ( z > 320 || z < - 900 ) continue;
+			if ( z > 820 || z < - 900 ) continue;
 			for ( let i = 1; i < res - 1; i ++ ) {
 
 				const k = j * res + i;
@@ -534,7 +650,7 @@ export class TerrainData {
 		for ( let j = 1; j < res - 1; j ++ ) {
 
 			const z = o + j + 0.5;
-			if ( z > 330 || z < - 880 ) continue;
+			if ( z > 850 || z < - 880 ) continue;
 			for ( let i = 1; i < res - 1; i ++ ) {
 
 				const k = j * res + i;
@@ -711,7 +827,7 @@ export class TerrainData {
 		for ( let j = 1; j < res - 1; j ++ ) {
 
 			const z = o + j + 0.5;
-			if ( z < - 900 || z > 420 ) continue;
+			if ( z < - 900 || z > 850 ) continue;
 			for ( let i = 1; i < res - 1; i ++ ) {
 
 				const k = j * res + i;
@@ -871,14 +987,42 @@ export class TerrainData {
 
 	heightAt( x, z ) {
 
+		x = wrapWorldCoordinate( x ); z = wrapWorldCoordinate( z );
 		const { res, texel, origin, heights } = this;
 		const fx = ( x - origin ) / texel - 0.5, fz = ( z - origin ) / texel - 0.5;
-		if ( fx < 0 || fz < 0 || fx >= res - 1 || fz >= res - 1 ) return - 90;
+		// Beyond the detailed home-island texture, evaluate the sparse satellite terrain directly.
+		// This keeps one-metre fidelity at Tidewater without allocating a 60 km texture.
+		if ( fx < 0 || fz < 0 || fx >= res - 1 || fz >= res - 1 ) return this.heightFn( x, z ).h + this.craterDeltaAt( x, z );
 		const i = Math.floor( fx ), j = Math.floor( fz );
 		const tx = fx - i, tz = fz - j;
 		const k = j * res + i;
 		const a = heights[ k ], b = heights[ k + 1 ], c = heights[ k + res ], d = heights[ k + res + 1 ];
-		return ( a * ( 1 - tx ) + b * tx ) * ( 1 - tz ) + ( c * ( 1 - tx ) + d * tx ) * tz;
+		return ( a * ( 1 - tx ) + b * tx ) * ( 1 - tz ) + ( c * ( 1 - tx ) + d * tx ) * tz + this.craterDeltaAt( x, z );
+
+	}
+
+	addCrater( x, z, radius = 4.2, depth = 1.3, dirX = 1, dirZ = 0, obliquity = 0, phase = null ) {
+
+		const dl = Math.hypot( dirX, dirZ ) || 1;
+		const craterPhase = phase ?? ( ( Math.sin( x * 0.013 + z * 0.017 ) * 0.5 + 0.5 ) * Math.PI * 2 );
+		this.craters.push( {
+			x: wrapWorldCoordinate( x ), z: wrapWorldCoordinate( z ), radius, depth,
+			dirX: dirX / dl, dirZ: dirZ / dl, obliquity: clamp( obliquity, 0, 0.92 ), phase: craterPhase,
+		} );
+		if ( this.craters.length > 32 ) this.craters.shift();
+
+	}
+
+	craterDeltaAt( x, z ) {
+
+		let delta = 0;
+		for ( const crater of this.craters ) {
+
+			const dx = wrappedWorldDelta( crater.x, x ), dz = wrappedWorldDelta( crater.z, z );
+			delta += craterProfileDelta( crater, dx, dz );
+
+		}
+		return delta;
 
 	}
 
@@ -895,6 +1039,7 @@ export class TerrainData {
 	// distance (m) from (x, z) to the nearest footpath edge (negative inside a path)
 	pathDistance( x, z ) {
 
+		x = wrapWorldCoordinate( x ); z = wrapWorldCoordinate( z );
 		let best = Infinity;
 		for ( const p of PATHS ) best = Math.min( best, polylineDistance( p.pts, x, z )[ 0 ] - p.w );
 		return best;
@@ -959,6 +1104,9 @@ export class TerrainData {
 	boundsFor( x0, z0, x1, z1 ) {
 
 		const { origin, texel, mmTile } = this;
+		// Dynamic far-ocean nodes may contain a procedural island or straddle the torus seam.  A
+		// conservative bound is cheap and prevents the quadtree from culling those islands.
+		if ( x0 < origin || z0 < origin || x1 > - origin || z1 > - origin ) return [ - 92, 190 ];
 		// pick the pyramid level where the box spans only a few tiles per side
 		const span = Math.max( x1 - x0, z1 - z0 ) / ( texel * mmTile );
 		const l = Math.max( 0, Math.min( this.mmLevels.length - 1, Math.ceil( Math.log2( Math.max( 1, span / 2 ) ) ) ) );

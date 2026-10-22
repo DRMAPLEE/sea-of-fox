@@ -1,4 +1,4 @@
-import { Vector2, Vector3 } from '../../engine/index.js';
+import { Vector2, Vector3, Vector4 } from '../../engine/index.js';
 import { ShaderModule, UniformBlock } from '../../engine/gpu/Shader.js';
 import { commonModule } from '../../engine/render/wgsl/common.js';
 import { lodFadeModule } from '../../materials/LODFade.js';
@@ -26,6 +26,7 @@ import { LOBE_TABLE, TREE_VARIANTS, SHRUB_VARIANTS } from './PlantGeometry.js';
 // set by InstanceLOD). Materials pass it into the functions above.
 
 const LOBE_VEC4 = Math.ceil( LOBE_TABLE.length / 4 );
+const BLAST_HOLES = 32;
 
 export const vegParams = new UniformBlock( 'VegParams', {
 	// Position of the *main* camera. The shadow pass has its own cameraPosition, so all
@@ -40,11 +41,26 @@ export const vegParams = new UniformBlock( 'VegParams', {
 	// Crown variants: the per-instance variant picks a row of the lobe table (per-lobe size, 0 =
 	// dropped), 4 entries per vec4
 	lobeTable: [ `vec4f[${ LOBE_VEC4 }]`, Array.from( { length: LOBE_VEC4 }, ( _, i ) => [ 0, 1, 2, 3 ].map( ( c ) => LOBE_TABLE[ i * 4 + c ] ?? 0 ) ) ],
+	// Persistent artillery clearings: x/z centre, radius, enabled. A fixed ring buffer bounds the
+	// uniform cost while keeping the most recent battlefield damage visible.
+	blastHoles: [ `vec4f[${ BLAST_HOLES }]`, Array.from( { length: BLAST_HOLES }, () => new Vector4() ) ],
+	blastCount: [ 'f32', 0 ],
+	pad1: [ 'vec3f', new Vector3() ],
 }, { label: 'vegParams' } );
 
 // three-style `{ value }` handles
 export const uCamPos = vegParams.fields.camPos;
 export const uGustOffset = vegParams.fields.gustOffset;
+let blastCursor = 0;
+
+export function addVegetationBlast( x, z, radius ) {
+
+	const holes = vegParams.fields.blastHoles.value;
+	holes[ blastCursor ].set( x, z, radius, 1 );
+	blastCursor = ( blastCursor + 1 ) % BLAST_HOLES;
+	vegParams.fields.blastCount.value = Math.min( BLAST_HOLES, vegParams.fields.blastCount.value + 1 );
+
+}
 
 // LOD window factor for an instance at `base` (0 = hidden, 1 = full size). Hard switches (a window
 // that starts at x > 0, or ends with z - y < 5 cm) are widened by a cross-fade band where both
@@ -89,6 +105,17 @@ fn vegNoise( p: vec2f ) -> f32 {
 	let c = vegHash12( i + vec2f( 0.0, 1.0 ) );
 	let d = vegHash12( i + vec2f( 1.0, 1.0 ) );
 	return mix( mix( a, b, u.x ), mix( c, d, u.x ), u.y );
+}
+
+// 0 inside a shell-cleared patch, 1 elsewhere. Used by trunks, crowns, impostors and grass.
+fn vegBlastKeep( xz: vec2f ) -> f32 {
+	var keep = 1.0;
+	for ( var i: i32 = 0; i < ${ BLAST_HOLES }; i ++ ) {
+		if ( f32( i ) >= vegParams.blastCount ) { break; }
+		let hole = vegParams.blastHoles[ i ];
+		if ( hole.w > 0.5 && distance( xz, hole.xy ) < hole.z ) { keep = 0.0; }
+	}
+	return keep;
 }
 
 // Wind ---------------------------------------------------------------------------------
@@ -141,7 +168,7 @@ fn vegLodScale( base: vec3f, lodRange: vec3f ) -> f32 {
 	let inside = d >= lodRange.x * ( 1.0 - VEG_LOD_BAND / 2.0 );
 	let hardEnd = lodRange.z - lodRange.y < 0.05;
 	let endK = select( 1.0 - smoothstep( lodRange.y, lodRange.z, d ), select( 0.0, 1.0, d < lodRange.y * ( 1.0 + VEG_LOD_BAND / 2.0 ) ), hardEnd );
-	return select( 0.0, endK, inside );
+	return select( 0.0, endK, inside ) * vegBlastKeep( base.xz );
 }
 
 // Fragment-stage keep test of the LOD cross-fade for an instance at base (true: keep the pixel)

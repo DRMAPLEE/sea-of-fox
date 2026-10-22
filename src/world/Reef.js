@@ -315,6 +315,12 @@ export class Reef {
 
 	}
 
+	setFishHabitat( x = 0, z = 0 ) {
+
+		this.fish.setHabitatOffset( x, z );
+
+	}
+
 	// ------------------------------------------------------------------ models
 
 	buildKinds() {

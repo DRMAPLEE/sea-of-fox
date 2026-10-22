@@ -164,6 +164,7 @@ export class FishSchools {
 		this.radius = radius;
 		this.anchors = anchors.length ? anchors : [ [ center.x, center.z ] ];
 		this.shoreField = shoreField;
+		this.habitatOffset = { x: 0, z: 0 };
 		this.rng = mulberry32( seed );
 		this.time = 0;
 		this.spray = null; // set by the owner (Spray.js): splashes of leaping mullet
@@ -423,6 +424,54 @@ export class FishSchools {
 	setWhale( whale ) {
 
 		this.whale = whale;
+
+	}
+
+	// Reuse the same fully animated schools at the coast currently being explored. Only one local
+	// ecology window is simulated, so adding life to the satellite islands does not multiply the
+	// main reef's already substantial boid cost by the island count.
+	setHabitatOffset( x, z ) {
+
+		const dx = x - this.habitatOffset.x, dz = z - this.habitatOffset.z;
+		if ( Math.hypot( dx, dz ) < 0.01 ) return;
+		this.habitatOffset.x = x; this.habitatOffset.z = z;
+		this.center.x += dx; this.center.z += dz;
+		const shifted = new Set();
+		const shiftPoints = ( points ) => {
+
+			if ( ! points || shifted.has( points ) ) return;
+			shifted.add( points );
+			for ( const p of points ) {
+
+				if ( Array.isArray( p ) ) { p[ 0 ] += dx; p[ 1 ] += dz; }
+				else if ( p && typeof p === 'object' ) { p.x += dx; p.z += dz; }
+
+			}
+
+		};
+		shiftPoints( this.anchors );
+		shiftPoints( this.dropPath );
+		for ( const g of this.groups ) {
+
+			for ( const p of [ g.home, g.center, g.goal ] ) if ( p ) { p.x += dx; p.z += dz; }
+			const zone = g.zone;
+			if ( zone ) {
+
+				if ( Number.isFinite( zone.x ) ) zone.x += dx;
+				if ( Number.isFinite( zone.z ) ) zone.z += dz;
+				shiftPoints( zone.anchors );
+				shiftPoints( zone.piles );
+				shiftPoints( zone.path );
+
+			}
+
+		}
+		for ( let i = 0; i < this.pos.length; i += 3 ) {
+
+			this.pos[ i ] += dx; this.pos[ i + 2 ] += dz;
+			this.prev[ i ] += dx; this.prev[ i + 2 ] += dz;
+
+		}
 
 	}
 

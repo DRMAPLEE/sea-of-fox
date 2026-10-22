@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Tidewater</title>
+	<title>潮汐水域</title>
 	<link rel="preload" as="image" href="ui/keyart-720.jpg" imagesrcset="ui/keyart-720.jpg 1280w, ui/keyart.jpg 2560w" imagesizes="100vw" />
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,34 +19,33 @@
 </head>
 <body>
 	<div id="app"></div>
-	<div id="fps">-- fps</div>
-	<div id="loader" role="status" aria-live="polite" aria-label="Loading Tidewater">
+	<div id="fps">-- 帧/秒</div>
+	<div id="loader" role="status" aria-live="polite" aria-label="正在加载潮汐水域">
 		<img class="loader-art" src="ui/keyart-720.jpg" srcset="ui/keyart-720.jpg 1280w, ui/keyart.jpg 2560w" sizes="100vw" alt="" decoding="async" fetchpriority="high" onload="this.classList.add('is-in')" />
 		<div class="loader-scrim"></div>
 		<div class="loader-inner">
 			<div class="loader-brand">
-				<p class="loader-kicker">An island fishing game</p>
-				<h1 class="loader-title">TIDEWATER</h1>
-				<p class="loader-tagline">Take the boat out, work the reef and the deep water, and sell your catch to Joe before dark.</p>
+				<p class="loader-kicker">海岛捕鱼游戏</p>
+				<h1 class="loader-title">潮汐水域</h1>
+				<p class="loader-tagline">驾船出海，在珊瑚礁和深水区捕鱼，天黑前把渔获卖给乔。</p>
 			</div>
 			<div class="loader-panel">
 				<div class="loader-row">
-					<span class="loader-status">Starting…</span>
+					<span class="loader-status">正在启动…</span>
 					<span class="loader-meta"><span class="loader-pct">0%</span><span class="loader-time">0:00</span></span>
 				</div>
 				<div class="loader-bar"><div class="loader-fill"></div><div class="loader-glint"></div></div>
-				<div class="loader-note">The first launch compiles the shaders and can take a minute or two. Later visits load much faster.</div>
+				<div class="loader-note">首次启动需要编译着色器，可能耗时一两分钟；以后再次进入会快很多。</div>
 				<div class="loader-tips">
-					<span class="loader-tip-label">Tip</span>
+					<span class="loader-tip-label">提示</span>
 					<div class="loader-tip-list">
-						<p class="loader-tip">Press <kbd>R</kbd> for the rod. Hold the left mouse button to wind up, release to cast: the longer you hold, the farther it goes.</p>
-						<p class="loader-tip">Watch the bobber. A few nibbles, then it's pulled under: click the left mouse button that moment to set the hook.</p>
-						<p class="loader-tip">In a fight, hold to reel but keep the line tension in the green. Ease off when the fish runs, or the line snaps.</p>
-						<p class="loader-tip">What bites depends on where you fish: the shallows, the reef, the deep water past the drop-off, and the time of day.</p>
-						<p class="loader-tip">Joe at the fish stand by the pier buys your catch. Fish are worth more by weight, so bring the big ones in.</p>
-						<p class="loader-tip">Marta at the boathouse sells upgrades: stronger line, a faster reel, a bigger hold, more fuel and a fish finder.</p>
-						<p class="loader-tip">Press <kbd>E</kbd> at the boat to board, at the wheel to take the helm, and again to step away and walk the deck.</p>
-						<p class="loader-tip">Press <kbd>I</kbd> for your cooler and the fish log. Deck lights from Marta let you fish after dark.</p>
+						<p class="loader-tip">盯住浮漂。轻咬几次后它会被拽入水下；就在那一刻按鼠标左键扬竿。</p>
+						<p class="loader-tip">搏鱼时按住收线，并让鱼线张力保持在绿色区域。鱼发力逃窜时要松手，否则鱼线会绷断。</p>
+						<p class="loader-tip">鱼会因水域和时间而异：浅滩、珊瑚礁、陡坡外的深水区，以及一天中的不同时段。</p>
+						<p class="loader-tip">码头边鱼摊的乔会收购渔获。鱼越重越值钱，尽量把大家伙钓上来。</p>
+						<p class="loader-tip">船屋的玛尔塔出售升级：更结实的鱼线、更快的卷线器、更大的鱼舱和探鱼器。</p>
+						<p class="loader-tip">在船边按 <kbd>E</kbd> 登船，在舵轮边按 <kbd>E</kbd> 掌舵，再按一次即可离舵并在甲板行走。</p>
+						<p class="loader-tip">按 <kbd>I</kbd> 打开冰箱和鱼类图鉴。向玛尔塔购买甲板灯后便可夜间垂钓。</p>
 					</div>
 				</div>
 			</div>

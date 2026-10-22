@@ -1,5 +1,5 @@
 import { FISH, fishValue, fishLengthCm } from './FishTable.js';
-import { defaultUpgrades, gearStats, nextLevel, UPGRADES, FUEL_PRICE } from './Gear.js';
+import { defaultUpgrades, gearStats, nextLevel, UPGRADES } from './Gear.js';
 
 const SAVE_KEY = 'tidewater.save.v1';
 
@@ -17,7 +17,6 @@ export class GameState {
 		// the last addFish: { species, kg, cm, value, newSpecies, record, prevBestKg, prevBestCm, kept } (the catch card)
 		this.lastCatch = null;
 		this.upgrades = defaultUpgrades();
-		this.fuel = null; // litres left (null = full tank)
 		this._nextId = 1;
 		this.listeners = new Set();
 
@@ -131,45 +130,9 @@ export class GameState {
 		if ( ! next || next.cost > this.money ) return null;
 		this.money -= next.cost;
 		this.upgrades[ key ] = next.index;
-		if ( key === 'fuel' ) this.fuel = null; // a new tank comes full
 		this.save();
 		this.emit();
 		return next;
-
-	}
-
-	get fuelL() {
-
-		return this.fuel === null ? this.stats.fuelL : Math.min( this.fuel, this.stats.fuelL );
-
-	}
-
-	// burn litres (no save: that happens when the boat stops or at the next sale / purchase)
-	burn( litres ) {
-
-		this.fuel = Math.max( 0, this.fuelL - litres );
-		return this.fuel;
-
-	}
-
-	refuelCost() {
-
-		return Math.ceil( ( this.stats.fuelL - this.fuelL ) * FUEL_PRICE );
-
-	}
-
-	// fill up as far as the money goes; returns litres bought
-	refuel() {
-
-		const missing = this.stats.fuelL - this.fuelL;
-		const litres = Math.min( missing, Math.floor( this.money / FUEL_PRICE ) );
-		if ( litres <= 0 ) return 0;
-		this.money -= Math.ceil( litres * FUEL_PRICE );
-		this.fuel = this.fuelL + litres;
-		if ( this.fuel >= this.stats.fuelL - 1e-3 ) this.fuel = null;
-		this.save();
-		this.emit();
-		return litres;
 
 	}
 
@@ -188,7 +151,7 @@ export class GameState {
 
 	toJSON() {
 
-		return { v: 1, money: this.money, inventory: this.inventory, log: this.log, upgrades: this.upgrades, fuel: this.fuel, nextId: this._nextId };
+		return { v: 1, money: this.money, inventory: this.inventory, log: this.log, upgrades: this.upgrades, nextId: this._nextId };
 
 	}
 
@@ -202,7 +165,6 @@ export class GameState {
 		this.log = d.log && typeof d.log === 'object' ? d.log : {};
 		for ( const [ k, v ] of Object.entries( this.log ) ) if ( FISH[ k ] && v && v.bestKg > 0 && ! Number.isFinite( v.bestCm ) ) v.bestCm = Math.round( fishLengthCm( k, v.bestKg ) );
 		this.upgrades = { ...defaultUpgrades(), ...( d.upgrades || {} ) };
-		this.fuel = Number.isFinite( d.fuel ) ? d.fuel : null;
 		this._nextId = Math.max( d.nextId | 0, ...this.inventory.map( ( f ) => f.id + 1 ), 1 );
 		return true;
 
@@ -241,7 +203,6 @@ export class GameState {
 		this.inventory = [];
 		this.log = {};
 		this.upgrades = defaultUpgrades();
-		this.fuel = null;
 		this.save();
 		this.emit();
 

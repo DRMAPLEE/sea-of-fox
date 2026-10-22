@@ -33,6 +33,14 @@ export const FISH = {
 	tarpon: { name: 'Tarpon', sci: 'Megalops atlanticus', lw: [ 0.0077, 3.02 ], model: 'tarpon', habitat: { pier: 0.35, bay: 0.5, shallows: 0.15 }, kg: [ 10, 45 ], price: 4, fight: 1, stamina: 24, time: 'night', rarity: 0.2 },
 };
 
+const CHINESE_FISH_NAMES = {
+	silverside: '硬头银汉鱼', mullet: '条纹鲻鱼', needlefish: '鳄针鱼', sergeant: '条纹豆娘鱼',
+	grunt: '蓝纹石鲈', yellowtail: '黄尾笛鲷', chromis: '蓝光鳃鱼', tang: '蓝刺尾鱼', wrasse: '猪齿鱼',
+	parrot: '红绿鹦嘴鱼', angel: '女王神仙鱼', jack: '大眼鲹', barracuda: '大魣', grouper: '拿骚石斑鱼',
+	redSnapper: '红笛鲷', tuna: '黑鳍金枪鱼', mahi: '鲯鳅', tarpon: '大海鲢',
+};
+for ( const id in CHINESE_FISH_NAMES ) FISH[ id ].name = CHINESE_FISH_NAMES[ id ];
+
 export const FISH_IDS = Object.keys( FISH );
 
 // $ value of a fish; trophy-sized ones fetch a bit more per kg

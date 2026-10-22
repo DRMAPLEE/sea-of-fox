@@ -54,6 +54,9 @@ slice table is in `src/audio/soundBank.js`.
 | `fish_splash.ogg` | 5 fish splashes / thrashing at the surface | [Fish Splashing Release 1.wav](https://freesound.org/people/paulprit/sounds/507094/), [Fish Splashing Release 2.wav](https://freesound.org/people/paulprit/sounds/507093/) | paulprit | CC0 1.0 |
 | `fish_flop.ogg` | landed fish flapping / flopping | [FishFlappingTail.wav](https://freesound.org/people/ramattahatta/sounds/649003/), [Fish Flopping.wav](https://freesound.org/people/RatBird/sounds/570208/) | ramattahatta, RatBird | CC0 1.0, CC0 1.0 |
 | `coins.ogg` | coins dropped in a bowl (selling fish) | [coins - in paper bowl 05.wav](https://freesound.org/people/Anthousai/sounds/336585/) | Anthousai | CC0 1.0 |
+| `storm-wind.mp3` | spatial howling wind around a waterspout cell | user-supplied `liecio-strong-howling-wind-132281.mp3` | Liecio | user-supplied; verify licence before redistribution |
+| `storm-rain.mp3` | looping thunder and rain bed under full cloud cover | user-supplied `freesound_community-034802_thunders-and-rain-73155.mp3` | Freesound Community | user-supplied; verify licence before redistribution |
+| `storm-bgm.mp3` | danger music inside the perceptible storm radius | user-supplied `luminewave-i-know-this-is-the-end-621152.mp3` | LumineWave | user-supplied; verify licence before redistribution |
 
 Note: `under_reef.ogg` uses the first ~200 s of 630436's preview (a narrow 1.7 kHz tone notched out).
 

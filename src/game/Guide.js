@@ -76,7 +76,6 @@ const CARDS = [
 		eyebrow: 'Fishing',
 		title: 'Cast, strike, reel',
 		body: `<div class="gm-guide-list">
-			${ row( k( 'R' ), 'Take out the rod (by the water or on the boat)' ) }
 			${ row( k( 'Hold', 'LMB' ), 'Wind up, release to cast. Hold longer to cast farther' ) }
 			${ row( k( 'LMB' ), 'Strike when the bobber is <b>pulled under</b> (dips are only nibbles)' ) }
 			${ row( k( 'Hold', 'LMB' ), 'Reel in. <b>Let go when the tension turns red</b>, or the line snaps' ) }
@@ -90,6 +89,7 @@ const CARDS = [
 		body: `<div class="gm-guide-list">
 			${ row( k( 'W', 'A', 'S', 'D' ), 'Move, mouse to look, <kbd>Shift</kbd> to run' ) }
 			${ row( k( 'E' ), 'Board the boat, take the helm, talk to Joe and Marta' ) }
+			${ row( k( 'M' ), 'Open the chart; click to set a waypoint or fast travel' ) }
 			${ row( k( 'F1' ), 'All controls, and this guide again' ) }
 		</div>
 		<div class="gm-guide-where">
@@ -108,7 +108,7 @@ const TIPS = {
 	full: 'Your cooler is <b>full</b>. Sell to Joe, or buy a bigger hold from Marta at the chandlery.',
 	boat: 'Your boat. <kbd>E</kbd> to board, <kbd>E</kbd> again at the wheel to drive (<kbd>W</kbd><kbd>S</kbd> throttle, <kbd>A</kbd><kbd>D</kbd> steer). Diesel is sold by Marta.',
 	joe: '<b>Joe</b> buys your fish. <kbd>E</kbd> to see what he will pay.',
-	marta: '<b>Marta</b> sells upgrades and diesel. <kbd>E</kbd> to see her stock.',
+	marta: '<b>Marta</b> sells fishing and boat upgrades. <kbd>E</kbd> to see her stock.',
 };
 
 const h = ( tag, cls, html ) => {

@@ -84,9 +84,10 @@ fn waterQueryCameraState() -> vec4f { return waterQueryResults[ 0 ]; }
 		}
 
 		const SH = !! ( S.shore && S.terrain );
+		const WS = !! S.waterspouts;
 		this._heightModule = new ShaderModule( {
 			name: 'waterQueryHeight',
-			deps: [ commonModule, fft.module, S.attenuationModule, S.terrain && S.terrain.module, SH && S.shore.module, S.wake && S.wake.module ],
+			deps: [ commonModule, fft.module, S.attenuationModule, S.terrain && S.terrain.module, SH && S.shore.module, S.wake && S.wake.module, WS && S.waterspouts.module ],
 			uniforms: S.params,
 			uniformName: 'waterSurface',
 			code: /* wgsl */`
@@ -96,6 +97,7 @@ ${ casc }
 	d *= waterSurface.amplitude;
 ${ SH ? '	d += shoreEvaluateNoNormal( x0, depth, terrainHeightAt( x0 ) ).disp;' : '' }
 ${ S.wake ? '	d += wakeDisplacement( x0 );' : '' }
+${ WS ? '	d += waterspoutWaterAt( x0 ).xyz;' : '' }
 	return d;
 }
 

@@ -2,6 +2,7 @@ import { Color, Group, Mesh, Quaternion, SphereGeometry, TorusGeometry, Vector3 
 import { Material } from '../engine/render/Material.js';
 import { loadStaticGLTF } from '../engine/loaders/StaticGLTF.js';
 import { LAYERS } from '../core/SceneRenderer.js';
+import { addVegetationBlast } from '../world/vegetation/VegNodes.js';
 
 const GRAVITY = 9.81;
 const MAX_RANGE = 2000;
@@ -12,6 +13,8 @@ const RELOAD_SECONDS = 6;
 // like area bombardment than one four-gun broadside.
 const CIRCLE_RADIUS = 5.8;
 const LINE_SPACING = 42;
+const DRIVER_BATTERIES = [ 'port', 'bow', 'starboard' ];
+const BATTERY_LABELS = { port: '左舷炮组', bow: '舰首炮组', starboard: '右舷炮组' };
 
 const _origin = new Vector3();
 const _target = new Vector3();
@@ -49,6 +52,42 @@ export function broadsideDirection( side, angle, boatQuaternion, out = new Vecto
 	const a = Math.max( - MAX_TRAVERSE, Math.min( MAX_TRAVERSE, angle ) );
 	// Boat frame: +Z bow, +X port. Angle sweeps fore/aft around the selected broadside.
 	return out.set( side * Math.cos( a ), 0, Math.sin( a ) ).applyQuaternion( boatQuaternion ).setY( 0 ).normalize();
+
+}
+
+export function traverseFromLook( side, angle, lookX, sensitivity = 0.0017 ) {
+
+	// The two batteries face opposite directions. Their camera-right axes are therefore mirrored,
+	// so the same screen-space mouse movement must apply an opposite local traverse sign.
+	const next = angle + lookX * sensitivity * ( side >= 0 ? 1 : - 1 );
+	return Math.max( - MAX_TRAVERSE, Math.min( MAX_TRAVERSE, next ) );
+
+}
+
+export function batteryDirection( battery, angle, boatQuaternion, out = new Vector3() ) {
+
+	const baseYaw = battery === 'port' ? Math.PI / 2 : battery === 'starboard' ? - Math.PI / 2 : 0;
+	const a = Math.max( - MAX_TRAVERSE, Math.min( MAX_TRAVERSE, angle ) );
+	const yaw = baseYaw - a;
+	return out.set( Math.sin( yaw ), 0, Math.cos( yaw ) ).applyQuaternion( boatQuaternion ).setY( 0 ).normalize();
+
+}
+
+export function driverTraverseFromLook( angle, lookX, sensitivity = 0.0017 ) {
+
+	return Math.max( - MAX_TRAVERSE, Math.min( MAX_TRAVERSE, angle + lookX * sensitivity ) );
+
+}
+
+export function cannonBelongsToBattery( cannon, battery, control ) {
+
+	return ( cannon.battery || cannon.side ) === battery && ( cannon.control || 'deck' ) === control;
+
+}
+
+export function effectiveArtilleryPattern( driverFiring, battery, pattern ) {
+
+	return driverFiring && ( battery === 'port' || battery === 'starboard' ) ? 'line' : pattern;
 
 }
 
@@ -110,6 +149,8 @@ export class NavalArtillery {
 		this.modelUrl = modelUrl;
 		this.player = null;
 		this.active = false;
+		this.driverFiring = false;
+		this.driverBattery = 'bow';
 		this.side = 1;
 		this.angle = 0;
 		this.range = 650;
@@ -152,7 +193,7 @@ export class NavalArtillery {
 		}
 		const ringGeo = new TorusGeometry( 1, 0.045, 7, 64 );
 		this.impactRings = [];
-		for ( let i = 0; i < 4; i ++ ) {
+		for ( let i = 0; i < 6; i ++ ) {
 
 			const ring = new Mesh( ringGeo, this.impactMaterial );
 			ring.layers.set( LAYERS.TRANSPARENT );
@@ -196,6 +237,60 @@ export class NavalArtillery {
 
 		this.player = player;
 		player.artillery = this;
+
+	}
+
+	canDriverFire( player ) {
+
+		return !! player && player.mode === 'boat' && player.boat === this.boat && this.cannons.some( ( cannon ) => cannon.control === 'helm' );
+
+	}
+
+	setDriverFiring( player, enabled ) {
+
+		const next = !! enabled && this.canDriverFire( player );
+		if ( next === this.driverFiring ) return next;
+		this.driverFiring = next;
+		this.player = player || this.player;
+		this._cameraReady = false;
+		this._followSalvo = 0;
+		this._followImpactTimer = 0;
+		if ( next ) {
+
+			this.angle = 0;
+			this._baseFov = this.camera.fov;
+			this._lmb = !! this.input.mouseDown;
+			this.guide.visible = true;
+			this._showHUD( true );
+			this.app.audio?.artilleryReady();
+			this.app.ui?.ui?.toast( `驾驶火控：${ this._batteryLabel() }`, 1100 );
+
+		} else {
+
+			this.guide.visible = false;
+			this._showHUD( false );
+			if ( this._baseFov !== null ) {
+
+				this.camera.fov = this._baseFov;
+				this.camera.updateProjectionMatrix();
+				this._baseFov = null;
+
+			}
+
+		}
+		return this.driverFiring;
+
+	}
+
+	cycleDriverBattery() {
+
+		const available = DRIVER_BATTERIES.filter( ( battery ) => this._gunsForBattery( battery ).length );
+		if ( ! available.length ) return;
+		const index = available.indexOf( this.driverBattery );
+		this.driverBattery = available[ ( index + 1 + available.length ) % available.length ];
+		this.angle = 0;
+		this._cameraReady = false;
+		this.app.ui?.ui?.toast( this._batteryLabel(), 850 );
 
 	}
 
@@ -292,7 +387,7 @@ export class NavalArtillery {
 		const player = this.player;
 		const inp = this.input;
 		const look = inp.consumeLook();
-		this.angle = Math.max( - MAX_TRAVERSE, Math.min( MAX_TRAVERSE, this.angle - look.x * 0.0017 ) );
+		this.angle = traverseFromLook( this.side, this.angle, look.x );
 		this.range = Math.max( MIN_RANGE, Math.min( MAX_RANGE, this.range - look.y * 3.2 ) );
 
 		if ( inp.hit( 'KeyE' ) || inp.hit( 'Escape' ) ) {
@@ -339,6 +434,54 @@ export class NavalArtillery {
 
 	}
 
+	updateDriver( dt, look ) {
+
+		if ( ! this.driverFiring || ! this.canDriverFire( this.player ) ) return false;
+		const inp = this.input;
+		this.angle = driverTraverseFromLook( this.angle, look.x );
+		this.range = Math.max( MIN_RANGE, Math.min( MAX_RANGE, this.range - look.y * 3.2 ) );
+
+		if ( inp.hit( 'KeyQ' ) ) this.cycleDriverBattery();
+		if ( inp.hit( 'KeyR' ) ) {
+
+			if ( this._effectivePattern() === 'line' && this.driverBattery !== 'bow' ) {
+
+				this.app.ui?.ui?.toast( '舱内舷炮固定为横排齐射', 950 );
+
+			} else {
+
+				this.pattern = this.pattern === 'circle' ? 'line' : 'circle';
+				this.app.ui?.ui?.toast( this.pattern === 'circle' ? '圆形范围打击' : '横排范围打击', 950 );
+
+			}
+
+		}
+		if ( inp.hit( 'KeyG' ) ) {
+
+			this.followEnabled = ! this.followEnabled;
+			if ( ! this.followEnabled ) {
+
+				this._followSalvo = 0;
+				this._followImpactTimer = 0;
+
+			}
+			this.app.ui?.ui?.toast( this.followEnabled ? '逐波跟弹镜头：开启' : '逐波跟弹镜头：关闭', 1100 );
+
+		}
+
+		const lmb = !! inp.mouseDown && inp.enabled;
+		if ( lmb && ! this._lmb ) this.fireSalvo();
+		this._lmb = lmb;
+		this.player.prompt = { key: 'F', text: '观察模式   ·   Q 切换炮组   ·   左键 齐射' };
+
+		this._aimPoint( _target );
+		this._updateGuide( _target );
+		this._updateDriverCamera( dt, _target );
+		this._updateHUD();
+		return true;
+
+	}
+
 	updateWorld( dt ) {
 
 		// Projectiles keep flying after the player leaves the station.
@@ -353,11 +496,46 @@ export class NavalArtillery {
 
 	_aimPoint( out ) {
 
-		broadsideDirection( this.side, this.angle, this.boat.quaternion, _direction );
+		this._aimDirection( _direction );
 		out.copy( this.boat.position ).addScaledVector( _direction, this.range );
 		const terrainY = this.app.terrainData?.heightAt( out.x, out.z );
 		out.y = Number.isFinite( terrainY ) && terrainY > 0 ? terrainY + 0.35 : 0.3;
 		return out;
+
+	}
+
+	_aimDirection( out ) {
+
+		if ( this.driverFiring ) return batteryDirection( this.driverBattery, this.angle, this.boat.quaternion, out );
+		return broadsideDirection( this.side, this.angle, this.boat.quaternion, out );
+
+	}
+
+	_batteryName() {
+
+		return this.driverFiring ? this.driverBattery : ( this.side > 0 ? 'port' : 'starboard' );
+
+	}
+
+	_batteryLabel() {
+
+		const battery = this._batteryName();
+		if ( this.driverFiring && battery !== 'bow' ) return `${ battery === 'port' ? '左舷' : '右舷' }舱炮组 · 6 门`;
+		if ( ! this.driverFiring && battery !== 'bow' ) return `${ battery === 'port' ? '左舷' : '右舷' }甲板炮组`;
+		return BATTERY_LABELS[ battery ] || '火炮';
+
+	}
+
+	_gunsForBattery( battery = this._batteryName() ) {
+
+		const control = this.driverFiring ? 'helm' : 'deck';
+		return this.cannons.filter( ( cannon ) => cannonBelongsToBattery( cannon, battery, control ) );
+
+	}
+
+	_effectivePattern() {
+
+		return effectiveArtilleryPattern( this.driverFiring, this._batteryName(), this.pattern );
 
 	}
 
@@ -388,20 +566,61 @@ export class NavalArtillery {
 			this.trajectoryDots[ i ].scale.setScalar( 0.75 + i * 0.035 );
 
 		}
-		broadsideDirection( this.side, this.angle, this.boat.quaternion, _forward );
+		this._aimDirection( _forward );
 		_right.set( - _forward.z, 0, _forward.x );
+		const pattern = this._effectivePattern();
+		const lineCount = pattern === 'line' ? Math.min( this.impactRings.length, this._gunsForBattery().length ) : 1;
 		for ( let i = 0; i < this.impactRings.length; i ++ ) {
 
 			const ring = this.impactRings[ i ];
-			const visible = this.pattern === 'line' || i === 0;
+			const visible = i < lineCount;
 			ring.visible = visible;
 			if ( ! visible ) continue;
 			ring.position.copy( target );
-			if ( this.pattern === 'line' ) ring.position.addScaledVector( _right, ( i - 1.5 ) * LINE_SPACING );
+			if ( pattern === 'line' ) ring.position.addScaledVector( _right, ( i - ( lineCount - 1 ) / 2 ) * LINE_SPACING );
 			ring.position.y = this._impactHeight( ring.position ) + 0.18;
 			ring.scale.setScalar( CIRCLE_RADIUS );
 
 		}
+
+	}
+
+	_updateDriverCamera( dt, aimPoint ) {
+
+		if ( this._updateFollowCamera( dt ) ) {
+
+			this.guide.visible = false;
+			this._setFov( dt, this._baseFov ?? this.camera.fov );
+			return;
+
+		}
+		this.guide.visible = true;
+		this._aimDirection( _direction );
+		const scale = this.boat.model.cameraScale || 1;
+		const focusHeld = !! this.input.rightDown && this.input.enabled;
+		this.boat.toWorld( new Vector3( 0, this.boat.model.cameraTargetY || 10, 0 ), _cameraTarget );
+		if ( focusHeld ) {
+
+			const focusHeight = Math.max( 80, Math.min( 330, this.range * 0.17 ) );
+			_cameraWant.copy( aimPoint ).addScaledVector( _up, focusHeight ).addScaledVector( _direction, - focusHeight * 0.12 );
+
+		} else {
+
+			_cameraWant.copy( _cameraTarget ).addScaledVector( _up, Math.max( 12 * scale, this.range * 1.05 ) );
+
+		}
+		if ( ! this._cameraReady ) {
+
+			this.player.camPos.copy( _cameraWant );
+			this._cameraReady = true;
+
+		}
+		this.player.camPos.lerp( _cameraWant, 1 - Math.exp( - dt * 5 ) );
+		this.camera.position.copy( this.player.camPos );
+		_look.copy( focusHeld ? aimPoint : _cameraTarget ).lerp( aimPoint, focusHeld ? 1 : 0.5 );
+		if ( ! focusHeld ) _look.y = _cameraTarget.y;
+		this.camera.lookAt( _look );
+		this._setFov( dt, this._baseFov ?? this.camera.fov );
 
 	}
 
@@ -535,17 +754,18 @@ export class NavalArtillery {
 			return false;
 
 		}
-		const guns = this.cannons.filter( ( cannon ) => ( cannon.side === 'port' ? 1 : - 1 ) === this.side );
+		const guns = this._gunsForBattery();
 		if ( ! guns.length ) return false;
 		const salvoId = ++ this._salvoId;
 		const centre = this._aimPoint( new Vector3() ).clone();
-		broadsideDirection( this.side, this.angle, this.boat.quaternion, _forward );
+		this._aimDirection( _forward );
 		_right.set( - _forward.z, 0, _forward.x );
+		const pattern = this._effectivePattern();
 
 		for ( let i = 0; i < guns.length; i ++ ) {
 
 			const target = centre.clone();
-			if ( this.pattern === 'circle' ) {
+			if ( pattern === 'circle' ) {
 
 				const a = i / guns.length * Math.PI * 2 + 0.35;
 				target.x += Math.cos( a ) * CIRCLE_RADIUS * 0.62;
@@ -563,7 +783,7 @@ export class NavalArtillery {
 
 		}
 		this.reload = RELOAD_SECONDS;
-		this.app.ui?.ui?.toast( `${ this.side > 0 ? '左舷' : '右舷' }齐射！`, 900 );
+		this.app.ui?.ui?.toast( `${ this._batteryLabel() }齐射！`, 900 );
 		return true;
 
 	}
@@ -642,6 +862,8 @@ export class NavalArtillery {
 	_finishShell( shell, index, point ) {
 
 		this._explode( point );
+		const ground = this.app.terrainData?.heightAt( point.x, point.z );
+		if ( Number.isFinite( ground ) && ground > 0.05 ) this._scarLand( point, shell.velocity );
 		if ( shell.salvoId === this._followSalvo ) {
 
 			this._followImpact.copy( point );
@@ -653,6 +875,23 @@ export class NavalArtillery {
 		this.app.audio?.stopArtilleryVoice( shell.voice );
 		shell.root.removeFromParent();
 		this.shells.splice( index, 1 );
+
+	}
+
+	_scarLand( point, velocity ) {
+
+		const radius = 4.2;
+		const horizontal = Math.hypot( velocity.x, velocity.z );
+		const speed = Math.hypot( horizontal, velocity.y ) || 1;
+		const dirX = horizontal > 1e-4 ? velocity.x / horizontal : 1;
+		const dirZ = horizontal > 1e-4 ? velocity.z / horizontal : 0;
+		const obliquity = Math.min( 0.92, horizontal / speed );
+		const phase = ( Math.sin( point.x * 0.013 + point.z * 0.017 ) * 0.5 + 0.5 ) * Math.PI * 2;
+		addVegetationBlast( point.x, point.z, radius + 2.2 );
+		// Rendering, collision, dynamic normals and soot now share one analytic deformation. The old
+		// raised circular overlay was the main source of the artificial "painted disc" appearance.
+		this.app.terrainData.addCrater( point.x, point.z, radius, 1.3, dirX, dirZ, obliquity, phase );
+		this.app.terrainGPU.addCrater( point.x, point.z, radius, 1.3, dirX, dirZ, obliquity, phase );
 
 	}
 
@@ -882,7 +1121,7 @@ export class NavalArtillery {
 		document.head.append( style );
 		const hud = document.createElement( 'div' );
 		hud.className = 'na-hud';
-		hud.innerHTML = `<div class="na-readout"><span class="na-side"></span><span class="na-range"></span><span class="na-range-meter"><span class="na-range-limits"><i>100 m</i><i>2 km</i></span><span class="na-range-track"><i></i></span></span><span class="na-mode"></span><span class="na-follow"></span></div><div class="na-reload"><span></span><em class="na-bar"><i></i></em></div><div class="na-help">鼠标水平　调整炮向 ±50°<br><b>鼠标上下</b>　调整 100 m–2 km<br><b>按住右键</b>　聚焦落点 / 镜头放大<br><b>V</b>　上空 / 炮组视角<br><b>G</b>　开启 / 关闭逐波跟弹<br><b>左键</b>　整舷齐射<br><b>Q</b>　圆形 / 横排<br><b>E</b>　退出炮位</div>`;
+		hud.innerHTML = `<div class="na-readout"><span class="na-side"></span><span class="na-range"></span><span class="na-range-meter"><span class="na-range-limits"><i>100 m</i><i>2 km</i></span><span class="na-range-track"><i></i></span></span><span class="na-mode"></span><span class="na-follow"></span></div><div class="na-reload"><span></span><em class="na-bar"><i></i></em></div><div class="na-help"></div>`;
 		( this.app.ui?.ui?.hud || document.getElementById( 'app' ) || document.body ).append( hud );
 		this._hud = hud;
 		this._hudSide = hud.querySelector( '.na-side' );
@@ -892,6 +1131,7 @@ export class NavalArtillery {
 		this._hudRangeBar = hud.querySelector( '.na-range-track i' );
 		this._hudReload = hud.querySelector( '.na-reload span' );
 		this._hudBar = hud.querySelector( '.na-bar i' );
+		this._hudHelp = hud.querySelector( '.na-help' );
 
 	}
 
@@ -906,14 +1146,17 @@ export class NavalArtillery {
 
 		this._createHUD();
 		if ( ! this._hud ) return;
-		this._hudSide.textContent = this.side > 0 ? '左舷炮组' : '右舷炮组';
+		this._hudSide.textContent = this._batteryLabel();
 		this._hudRange.textContent = `${ Math.round( this.range ) } m`;
 		this._hudRangeBar.style.transform = `scaleX(${ ( this.range - MIN_RANGE ) / ( MAX_RANGE - MIN_RANGE ) })`;
-		this._hudMode.textContent = this.pattern === 'circle' ? '○ 圆形散布' : '━ 横排散布';
+		this._hudMode.textContent = this._effectivePattern() === 'circle' ? '○ 圆形散布' : '━ 横排散布';
 		this._hudFollow.textContent = this.followEnabled ? '跟弹 开' : '跟弹 关';
 		this._hudFollow.style.color = this.followEnabled ? '#ffe083' : 'rgba(223,249,255,.55)';
 		this._hudReload.textContent = this.reload > 0 ? `装填中 · ${ this.reload.toFixed( 1 ) } s` : '火炮就绪';
 		this._hudBar.style.transform = `scaleX(${ 1 - this.reload / RELOAD_SECONDS })`;
+		this._hudHelp.innerHTML = this.driverFiring
+			? '鼠标水平　调整炮向 ±50°<br><b>鼠标上下</b>　调整 100 m–2 km<br><b>按住右键</b>　聚焦落点<br><b>Q</b>　切换左舷 / 舰首 / 右舷炮组<br><b>R</b>　舰首炮散布（舷炮固定横排）<br><b>G</b>　开启 / 关闭逐波跟弹<br><b>左键</b>　当前炮组齐射<br><b>F</b>　返回观察模式'
+			: '鼠标水平　调整炮向 ±50°<br><b>鼠标上下</b>　调整 100 m–2 km<br><b>按住右键</b>　聚焦落点 / 镜头放大<br><b>V</b>　上空 / 炮组视角<br><b>G</b>　开启 / 关闭逐波跟弹<br><b>左键</b>　整舷齐射<br><b>Q / R</b>　圆形 / 横排<br><b>E</b>　退出炮位';
 
 	}
 

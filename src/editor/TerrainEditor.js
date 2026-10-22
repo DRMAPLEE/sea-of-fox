@@ -11,6 +11,20 @@ const LAYERS = {
 	'paint-snow': [ 'snow', 255 ],
 };
 
+// Painted surface materials are selections, not unrelated transparent overlays. Clearing the
+// competing masks makes a new material visible even over an area that was previously painted as
+// snow/rock/sand. Seagrass and seabed rubble form their own underwater pair.
+const PAINT_CONFLICTS = {
+	rock: [ 'sand', 'path', 'meadow', 'forest', 'snow' ],
+	sand: [ 'rock', 'path', 'meadow', 'forest', 'snow' ],
+	path: [ 'rock', 'sand', 'meadow', 'forest', 'snow' ],
+	meadow: [ 'rock', 'sand', 'path', 'forest', 'snow' ],
+	forest: [ 'rock', 'sand', 'path', 'meadow', 'snow' ],
+	snow: [ 'sand', 'path', 'meadow', 'forest' ],
+	seagrass: [ 'rubble' ],
+	rubble: [ 'seagrass' ],
+};
+
 function emptyBounds() {
 
 	return { x0: Infinity, y0: Infinity, x1: - Infinity, y1: - Infinity };
@@ -140,11 +154,26 @@ export class TerrainEditor {
 
 	_paint( channel, index, target, falloff, inverse, i, j ) {
 
+		// At the old 0.22 multiplier the default brush wrote only 14% at its centre. Snow happened
+		// to show because its shader threshold starts at 4%, while most other materials start near
+		// 30-60%. This exponential response gives one deliberate dab a visible result while retaining
+		// a soft falloff and allowing repeated passes to converge smoothly.
+		const alpha = clamp( 1 - Math.exp( - this.strength * 1.5 * falloff ), 0, 0.95 );
+		this._blendPaintChannel( channel, index, inverse ? 0 : target, alpha, i, j );
+		const clearAlpha = clamp( Math.max( alpha, falloff * 0.98 ), 0, 0.98 );
+		if ( ! inverse ) for ( const conflict of PAINT_CONFLICTS[ channel ] || [] ) {
+
+			if ( this.terrain[ conflict ] ) this._blendPaintChannel( conflict, index, 0, clearAlpha, i, j );
+
+		}
+
+	}
+
+	_blendPaintChannel( channel, index, goal, alpha, i, j ) {
+
 		const array = this.terrain[ channel ];
 		this._remember( channel, index, array[ index ], i, j );
 		const max = array instanceof Float32Array ? 1 : 255;
-		const goal = inverse ? 0 : target;
-		const alpha = clamp( this.strength * 0.22 * falloff, 0, 0.9 );
 		const next = array[ index ] + ( goal - array[ index ] ) * alpha;
 		array[ index ] = array instanceof Float32Array ? clamp( next, 0, max ) : Math.round( clamp( next, 0, max ) );
 

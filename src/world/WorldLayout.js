@@ -6,6 +6,11 @@ import * as THREE from '../engine/index.js';
 export const WORLD = {
 	terrainSize: 2048, // heightmap domain, centered at origin
 	terrainRes: 2048,
+	// The playable sea is a torus: crossing one edge enters from the opposite edge.  Keeping the
+	// period separate from terrainSize lets the hand-authored home island retain its 1 m heightmap
+	// while procedural islands and ocean occupy a much larger navigable world.
+	worldPeriod: 60000,
+	renderRadius: 4000,
 
 	// Central sandy beach inside the bay, shoreline near z ≈ -42 at x = 0.
 	beach: { xMin: - 150, xMax: 170 },
@@ -36,3 +41,25 @@ export const WORLD = {
 	// Incoming swell direction (unit, travel direction)
 	swellDir: new THREE.Vector2( - 0.12, - 1 ).normalize(),
 };
+
+export function wrapWorldCoordinate( value ) {
+
+	const period = WORLD.worldPeriod, half = period * 0.5;
+	return ( ( value + half ) % period + period ) % period - half;
+
+}
+
+export function wrappedWorldDelta( from, to ) {
+
+	return wrapWorldCoordinate( to - from );
+
+}
+
+export function wrapWorldPosition( position, out = {} ) {
+
+	const x = wrapWorldCoordinate( position.x ), z = wrapWorldCoordinate( position.z );
+	out.dx = x - position.x; out.dz = z - position.z;
+	position.x = x; position.z = z;
+	return out;
+
+}

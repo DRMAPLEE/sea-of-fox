@@ -33,9 +33,9 @@ state.addFish( 'barracuda', 3.2, 11 );
 const game = { state, sellAll() { state.sell(); }, sell( ids ) { state.sell( ids ); } };
 const h = new GameHUD( ui, game );
 const fight = { tension: 0.62, band: [ 0.35, 0.8 ], stamina: 0.55, distance: 11.4, surge: 0.1 };
-h.update( { fuel: { litres: 23, tank: 40 }, sonar: { depth: 12.4, fish: 0.5 }, fight: view === 'fight' ? fight : null, casting: view === 'cast', power: 0.7, bite: view === 'bite', aiming: true } );
+h.update( { sonar: { depth: 12.4, fish: 0.5 }, fight: view === 'fight' ? fight : null, casting: view === 'cast', power: 0.7, bite: view === 'bite', aiming: true } );
 if ( view === 'inv' ) h.toggleInventory( true );
-if ( view === 'shop' ) { state.buy( 'reel' ); h.openStand( { kind: 'shop', name: 'Marta · Chandlery', greeting: 'Line, reels, a bigger hold, diesel. What do you need?' } ); }
+if ( view === 'shop' ) { state.buy( 'reel' ); h.openStand( { kind: 'shop', name: 'Marta · Chandlery', greeting: 'Line, reels, a bigger hold and engine parts. What do you need?' } ); }
 if ( view === 'stand' ) h.openStand( { name: 'Joe · Fish buyer', greeting: 'Let\'s see what you caught. Fair prices, cash.' } );
 if ( view === 'fight' ) ui.toast( 'Fish on!' );
 if ( [ 'catch', 'record', 'newspecies', 'full' ].includes( view ) ) {

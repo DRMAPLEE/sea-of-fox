@@ -22,13 +22,13 @@ import { TerrainData } from './world/TerrainData.js';
 import { TerrainGPU } from './world/TerrainGPU.js';
 import { Terrain } from './world/Terrain.js';
 import { computeShoreField } from './world/ShoreField.js';
-import { WORLD } from './world/WorldLayout.js';
+import { WORLD, wrapWorldCoordinate, wrappedWorldDelta, wrapWorldPosition } from './world/WorldLayout.js';
+import { ARCHIPELAGO, buildIslandShoreStrip, islandCoastFrame, islandDistance } from './world/Archipelago.js';
 import { Colliders } from './world/Colliders.js';
 import { Village } from './world/Village.js';
 import { Reef } from './world/Reef.js';
 import { BoatModel } from './world/BoatModel.js';
 import { DeckCannon } from './world/DeckCannon.js';
-import { loadStaticGLTF } from './engine/loaders/StaticGLTF.js';
 import { Rocks } from './world/Rocks.js';
 import { Debris } from './world/Debris.js';
 import { Wildlife } from './world/wildlife/Wildlife.js';
@@ -52,6 +52,8 @@ import { Spray } from './fx/Spray.js';
 import { SeaDetail } from './ocean/SeaDetail.js';
 import { MarineSnow } from './fx/MarineSnow.js';
 import { AirMotes } from './fx/AirMotes.js';
+import { ParticleWaterspouts, WaterspoutField } from './fx/Waterspouts.js';
+import { Waterspouts } from './fx/WaterspoutColumn.js';
 
 import { Underwater, LENS_REACH } from './post/Underwater.js';
 import { PostFX } from './post/PostFX.js';
@@ -70,6 +72,16 @@ import { SoundScape } from './audio/SoundScape.js';
 import { updateCameraVelocity, useStaticVelocity } from './post/CameraVelocity.js';
 
 const _up = new Vector3( 0, 1, 0 );
+const REGIONAL_WEATHER_ISLANDS = ARCHIPELAGO.filter( ( island ) => island.climate === 'polar' || island.climate === 'temperate' );
+const REGIONAL_WEATHER_ENTER = 1800;
+const REGIONAL_WEATHER_EXIT = 2300;
+const REGIONAL_CLOUD_STATES = {
+	// Polar weather can still roll a crystalline clear day, but also has the strongest overcast.
+	polar: [ 0.2, 0.36, 0.55, 0.74, 0.9, 0.98 ],
+	// The Faroe belt is the maritime-temperate transition: changeable and cloudier on average than
+	// the tropics, without inheriting permanent polar gloom.
+	temperate: [ 0.28, 0.42, 0.56, 0.68, 0.8, 0.9 ],
+};
 
 export class App {
 
@@ -82,6 +94,7 @@ export class App {
 			exposure: 0.55,
 			renderScale: 1, // internal resolution (the temporal upscaler reconstructs the output), Performance tab
 		};
+		this._worldShift = { dx: 0, dz: 0 };
 		this.qs = new URLSearchParams( location.search );
 
 	}
@@ -96,7 +109,7 @@ export class App {
 			if ( typeof requestAnimationFrame === 'function' ) await new Promise( ( r ) => requestAnimationFrame( () => setTimeout( r, 0 ) ) );
 
 		};
-		await progress( 0.02, 'Starting WebGPU…' );
+		await progress( 0.02, '正在启动 WebGPU…' );
 		const engine = this.engine = new Engine( document.getElementById( 'app' ) );
 		await engine.init();
 		// systems take `renderer` first as in the three.js version: it is the Engine now (GPU access is global)
@@ -114,7 +127,7 @@ export class App {
 		this.fly.setPose( new Vector3( 20, 6, - 20 ), Math.PI * 0.9, - 0.12 );
 
 		// ---------------------------------------------------------------- sky
-		await progress( 0.04, 'Building the atmosphere…' );
+		await progress( 0.04, '正在生成大气层…' );
 		this.atmosphere = new Atmosphere( renderer );
 		this.sky = new Sky( this.atmosphere );
 		if ( ! qs.has( 'noClouds' ) ) {
@@ -123,6 +136,10 @@ export class App {
 			this.clouds = qs.has( 'oldClouds' ) ? new Clouds( renderer, this.atmosphere ) : new SkyProClouds( renderer, this.atmosphere );
 			if ( this.clouds.ready ) await this.clouds.ready;
 			this.sky.clouds = this.clouds;
+			this._normalCloudCoverage = this.clouds.coverage.value;
+			this._regionalWeatherActive = false;
+			this._regionalWeatherIsland = null;
+			this._regionalWeatherUntil = 0;
 
 		}
 
@@ -136,16 +153,16 @@ export class App {
 		this.environment = new Environment( renderer, scene, this.sky );
 
 		// ---------------------------------------------------------------- island
-		await progress( 0.06, 'Shaping the island…' );
+		await progress( 0.06, '正在塑造岛屿…' );
 		this.terrainData = new TerrainData();
 		this.colliders = new Colliders();
 		// the village flattens building pads into the heightmap: build it before any terrain
 		// data is derived (shore field, GPU textures, meshes)
-		await progress( 0.12, 'Building the village…' );
+		await progress( 0.12, '正在建造村庄…' );
 		this.village = new Village( { scene, terrain: this.terrainData, colliders: this.colliders } );
 		if ( qs.has( 'map' ) && ! qs.has( 'editor' ) ) {
 
-			await progress( 0.13, 'Loading the authored map…' );
+			await progress( 0.13, '正在加载自定义地图…' );
 			const runtime = await import( './editor/RuntimeMap.js' );
 			this.mapDocument = await runtime.loadRuntimeMapDocument( qs.get( 'map' ) );
 			this.mapTerrainTracker = runtime.applyRuntimeTerrain( this.terrainData, this.mapDocument );
@@ -153,13 +170,13 @@ export class App {
 		}
 		if ( ! qs.has( 'noVeg' ) ) {
 
-			await progress( 0.14, 'Planting the island…' );
+			await progress( 0.14, '正在种植岛屿植被…' );
 			this.vegetation = new Vegetation( { scene, terrain: this.terrainData, village: this.village } );
 			useStaticVelocity( this.vegetation.group );
 
 		}
 
-		await progress( 0.19, 'Rolling in the swell…' );
+		await progress( 0.19, '正在生成涌浪…' );
 		this.shoreField = computeShoreField( this.terrainData, { res: 512, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
 		this.terrainGPU = new TerrainGPU( this.terrainData, this.shoreField );
 		// terrain and rocks apply the heightfield sun shadow (long hill shadows) in their own lighting
@@ -171,11 +188,11 @@ export class App {
 		this.terrain.mesh.material.appliesHillShadow = true;
 		this.rocks.material.appliesHillShadow = true;
 
-		await progress( 0.23, 'Growing the reef…' );
+		await progress( 0.23, '正在生成珊瑚礁…' );
 		this.reef = new Reef( { scene, terrain: this.terrainData, shoreField: this.shoreField } );
 		if ( this.mapDocument ) {
 
-			await progress( 0.24, 'Placing authored entities…' );
+			await progress( 0.24, '正在放置自定义实体…' );
 			const { loadRuntimeEntities } = await import( './editor/RuntimeMap.js' );
 			this.mapEntities = await loadRuntimeEntities( this, this.mapDocument );
 
@@ -210,9 +227,16 @@ export class App {
 		this.tallShip.boardVerticalRange = 3;
 		this.tallShip.helmPoint = new Vector3( 0, 6.9, - 29.5 );
 		this.tallShip.helmEye.set( 0, 8.55, - 29.5 );
-		this.tallShip.helmAccessPoints = [ new Vector3( - 2.2, 6.9, - 28.8 ), new Vector3( 2.2, 6.9, - 28.8 ), new Vector3( 0, 6.9, - 29.5 ) ];
+		this.tallShip.helmAccessPoints = [
+			new Vector3( - 3.2, 6.3, - 28.2 ), new Vector3( 3.2, 6.3, - 28.2 ),
+			new Vector3( - 1.6, 6.3, - 27.2 ), new Vector3( 1.6, 6.3, - 27.2 ),
+			new Vector3( 0, 6.3, - 29.5 ),
+		];
 		this.tallShip.helmExitPoint = new Vector3( - 2.2, 6.9, - 28.8 );
-		this.tallShip.helmReach = 2;
+		this.tallShip.helmReach = 2.8;
+		this.tallShip.helmVerticalReach = 1.45;
+		this.tallShip.helmMinY = 4.8;
+		this.tallShip.helmMaxY = 7.8;
 		this.tallShip.deckStepHeight = 0.9;
 		this.tallShip.deckJumpSpeed = 5.2;
 		this.tallShip.exitPoints = [
@@ -230,7 +254,7 @@ export class App {
 		const base = ( import.meta.env && import.meta.env.BASE_URL ) || '/';
 		try {
 
-			await progress( 0.27, 'Rigging the pirate ship…' );
+			await progress( 0.27, '正在装配海盗船…' );
 			// sinkModel 1.7: the model's painted waterline is ~1.7 model units above the keel
 			await this.tallShip.loadVisual( base + 'models/boat/tall-ship.glb', { sizeMultiplier: 10, sinkModel: 1.7 } );
 
@@ -242,7 +266,7 @@ export class App {
 		}
 		if ( this.tallShip.importedVisual ) try {
 
-			await progress( 0.285, 'Mounting the deck cannons…' );
+			await progress( 0.285, '正在安装甲板火炮…' );
 			// Measured against the pirate ship's geometry: small 1.8 m guns on the waist side shelf,
 			// barrels poking out through the open balustrade (rail top y≈3.9 model, no clipping).
 			// Stations avoid the mizzen shrouds, the mainmast and its shroud group. Mirrored for a
@@ -259,7 +283,33 @@ export class App {
 				const cannon = new DeckCannon( { length: 3.5, audioUrl: base + 'audio/heavy-shot.mp3' } );
 				await cannon.load( base + 'models/cannon/cannon-with-muzzle.glb' );
 				cannon.side = side > 0 ? 'port' : 'starboard';
+				cannon.control = 'deck';
 				cannon.mount( this.tallShip.group, new Vector3( side * 4.1, station.y, station.z ), side > 0 ? 0 : Math.PI );
+				this.tallShipCannons.push( cannon );
+
+			}
+			// The helm controls a separate enclosed gun deck: six guns per side, lower in the hull.
+			// These are not the four exposed guns used by a player standing at a deck battery.
+			const cabinStations = [ - 22.0, - 16.6, - 11.2, - 5.8, - 0.4, 5.0 ];
+			for ( const side of [ 1, - 1 ] ) for ( const z of cabinStations ) {
+
+				const cannon = new DeckCannon( { length: 3.5, audioUrl: base + 'audio/heavy-shot.mp3' } );
+				await cannon.load( base + 'models/cannon/cannon-with-muzzle.glb' );
+				cannon.side = side > 0 ? 'port' : 'starboard';
+				cannon.control = 'helm';
+				cannon.mount( this.tallShip.group, new Vector3( side * 4.8, 0.65, z ), side > 0 ? 0 : Math.PI );
+				this.tallShipCannons.push( cannon );
+
+			}
+			// A paired chase battery sits on the forecastle and fires over the bow (+Z).
+			for ( const x of [ - 1.55, 1.55 ] ) {
+
+				const cannon = new DeckCannon( { length: 3.5, audioUrl: base + 'audio/heavy-shot.mp3' } );
+				await cannon.load( base + 'models/cannon/cannon-with-muzzle.glb' );
+				cannon.side = 'bow';
+				cannon.battery = 'bow';
+				cannon.control = 'helm';
+				cannon.mount( this.tallShip.group, new Vector3( x, 10.9, 18.4 ), - Math.PI / 2 );
 				this.tallShipCannons.push( cannon );
 
 			}
@@ -273,12 +323,17 @@ export class App {
 		}
 
 		// ---------------------------------------------------------------- ocean
-		await progress( 0.3, 'Simulating the ocean…' );
+		await progress( 0.3, '正在模拟海洋…' );
 		this.fft = new OceanFFT( renderer );
 		if ( this.reef.setOcean ) this.reef.setOcean( this.fft ); // coral / sea fan sway follows the simulated swell
 		this.foamTexture = createFoamTexture( renderer );
 		this.oceanLOD = new CDLOD( { gridSize: Number( qs.get( 'G' ) || 32 ), leafSize: 8, levels: 12, minY: - 25, maxY: 25 } );
 		this.surface = new WaterSurface( { fft: this.fft, cdlod: this.oceanLOD, foamTexture: this.foamTexture } );
+		this.waterspoutField = qs.has( 'noWaterspouts' ) ? null : new WaterspoutField();
+		this.surface.waterspouts = this.waterspoutField;
+		this.stormWeather = { x: 0, z: 0, wind: 0, rain: 0, bgm: 0 };
+		this.rainIntensity = 0;
+		this._stormCoverageBase = null;
 		this.surface.terrain = this.terrainGPU;
 		this.seaDetail = new SeaDetail();
 		this.surface.detail = this.seaDetail;
@@ -393,11 +448,34 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			spray: this.spray, clouds: this.clouds,
 		} );
 		scene.add( this.breakers.mesh );
+		// One camera-local breaker strip is reused by every generated island. The main island keeps
+		// its authored full beach strip above; remote coastlines wake this one only when explored.
+		const firstSatellite = ARCHIPELAGO[ 1 ];
+		const satelliteStations = buildIslandShoreStrip( firstSatellite, firstSatellite.x + firstSatellite.rx * 1.2, firstSatellite.z, { count: 601, spacing: 0.8 } );
+		this.satelliteBreakers = new Breakers( renderer, {
+			surface: this.surface, shore: this.shore, terrainData: this.terrainData, sky: this.sky,
+			spray: this.spray, clouds: this.clouds, stationSet: satelliteStations,
+		} );
+		this.satelliteBreakers.active = false;
+		scene.add( this.satelliteBreakers.mesh );
+		// The shared spray material can consult one crest field for shadows; retain the authored
+		// beach's field while both breaker systems still emit into the same spray/foam ring.
+		this.spray.waveShadow = this.breakers.sprayShadowModule;
 		// dust, pollen, salt aerosol, seed fluff and gnats drifting around the camera
 		this.airMotes = new AirMotes( { terrain: this.terrainGPU, clouds: this.clouds, csm: this.csm, reversedDepth: true } );
 		scene.add( this.airMotes.mesh );
-		this.boatCtl = new BoatController( { model: this.boat, query: this.query, terrain: this.terrainData, colliders: this.colliders } );
-		this.tallShipCtl = new BoatController( { model: this.tallShip, query: this.query, terrain: this.terrainData, colliders: this.colliders, dock: WORLD.tallShipDock } );
+		// No default storm: the continuous blue-black column and its outer spray shell stay hidden
+		// until random weather or the chart spawns an analytical Rankine vortex.
+		if ( this.waterspoutField ) {
+
+			this.waterspouts = new Waterspouts( { field: this.waterspoutField } );
+			scene.add( this.waterspouts.mesh );
+			this.waterspoutParticles = new ParticleWaterspouts( { spray: this.spray, field: this.waterspoutField } );
+			scene.add( this.waterspoutParticles.mesh );
+
+		}
+		this.boatCtl = new BoatController( { model: this.boat, query: this.query, terrain: this.terrainData, colliders: this.colliders, waterspouts: this.waterspoutField } );
+		this.tallShipCtl = new BoatController( { model: this.tallShip, query: this.query, terrain: this.terrainData, colliders: this.colliders, dock: WORLD.tallShipDock, waterspouts: this.waterspoutField } );
 		this.boatCtls = [ this.boatCtl, this.tallShipCtl ];
 		this.boatSpray = new BoatSpray( { boat: this.boatCtl, spray: this.spray } );
 		// humpback cruising the deep water around the island (model fetched from public/models/whale)
@@ -411,30 +489,6 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 			console.warn( 'whale model failed to load', e );
 			this.whale = null;
-
-		}
-
-		// Umibozu (海坊主): the black "sea monk" of Japanese folklore — a huge bald head and shoulders
-		// rising from the offing. Edo-period kaidan collections put it at several to tens of meters
-		// over the waves; here ~10 m of the torso break the surface, far south of the bay where the
-		// whale route never reaches. It rides the swell through a water query, like the whale does.
-		this.umibozu = null;
-		try {
-
-			const imported = await loadStaticGLTF( base + 'models/props/umibozu.glb' );
-			const body = imported.group;
-			body.name = 'umibozu';
-			const size = imported.bounds.getSize( new Vector3() );
-			body.scale.setScalar( 12 / size.y ); // ~12 m tall overall, the lowest ~1.5 m stay submerged
-			body.position.set( - 40, - 1.5, 520 ); // open sea south of the bay, facing the shore
-			body.rotation.y = Math.PI; // glTF front (+Z) turned toward the bay (-Z)
-			scene.add( body );
-			underwaterMode( body, 'lite' );
-			this.umibozu = { group: body, slot: this.query.allocate( 'umibozu', 1 ), water: 0, t: 0 };
-
-		} catch ( e ) {
-
-			console.warn( 'umibozu model failed to load', e );
 
 		}
 
@@ -467,7 +521,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.freeCam = qs.has( 'fly' );
 
 		// ---------------------------------------------------------------- post
-		await progress( 0.34, 'Preparing the shaders…' );
+		await progress( 0.34, '正在准备着色器…' );
 		this.underwater = new Underwater( {
 			depthTexture: this.sceneRenderer.sceneRT.depthTexture, maskTexture: this.sceneRenderer.waterMaskTexture,
 			query: this.query, caustics: this.caustics, fft: this.fft,
@@ -524,9 +578,9 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// ---- compile pipelines asynchronously (keeps the page responsive), then prime a few
 		// frames behind the loading screen so any remaining first-use stalls happen there
 		// stage weights: in the browser the pipeline compile below takes far longer than everything before it
-		await progress( 0.36, 'Compiling shaders…', 0.95 );
+		await progress( 0.36, '正在编译着色器…', 0.95 );
 		await this.precompile();
-		await progress( 0.96, 'Warming up…' );
+		await progress( 0.96, '正在预热场景…' );
 		for ( let i = 0; i < 2; i ++ ) {
 
 			this.frame( 1 / 60 );
@@ -702,6 +756,67 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	}
 
+	// Move the active vessel to navigable water, or an on-foot player to safe dry ground near a
+	// chart waypoint. The radial search makes island-centre waypoints useful without beaching a ship.
+	fastTravelTo( x, z ) {
+
+		x = wrapWorldCoordinate( x ); z = wrapWorldCoordinate( z );
+		const p = this.player, terrain = this.terrainData;
+		if ( ! p || ! terrain ) return false;
+		if ( this.freeCam ) this.setFreeCam( false );
+		if ( this.artillery?.active ) this.artillery.exit();
+		this.artillery?.setDriverFiring( p, false );
+		this.game?.cancelLine( true );
+		this.game?.rod?.equip( false );
+
+		const findNear = ( wantLand ) => {
+
+			const suitable = ( px, pz ) => wantLand ? terrain.heightAt( px, pz ) >= 1 : terrain.heightAt( px, pz ) <= - 3;
+			if ( suitable( x, z ) ) return { x, z };
+			for ( let radius = 40; radius <= 1500; radius += 40 ) for ( let i = 0; i < 32; i ++ ) {
+
+				const angle = i / 32 * Math.PI * 2;
+				const px = wrapWorldCoordinate( x + Math.cos( angle ) * radius );
+				const pz = wrapWorldCoordinate( z + Math.sin( angle ) * radius );
+				if ( suitable( px, pz ) ) return { x: px, z: pz };
+
+			}
+			return { x, z };
+
+		};
+
+		const aboard = p.mode === 'boat' || p.mode === 'deck';
+		if ( aboard ) {
+
+			const target = findNear( false ), boat = p.boat || this.boatCtl;
+			boat.position.set( target.x, 0, target.z );
+			boat.velocity.set( 0, 0, 0 );
+			boat.angular.set( 0, 0, 0 );
+			boat.throttle = 0;
+			boat.rpm = 0;
+			boat.moored = false;
+			boat.apply();
+			p.velocity.set( 0, 0, 0 );
+			p.deckVel.set( 0, 0, 0 );
+			p.camInit = false;
+			if ( p.mode === 'deck' ) p.deckToWorld();
+			else boat.toWorld( boat.model.helmEye, p.position ).addScaledVector( _up, - 1.62 );
+			return { ...target, mode: 'boat' };
+
+		}
+
+		const target = findNear( true ), ground = terrain.heightAt( target.x, target.z );
+		p.mode = ground >= 0 ? 'walk' : 'swim';
+		p.position.set( target.x, ground >= 0 ? ground + 0.05 : - 0.2, target.z );
+		p.velocity.set( 0, 0, 0 );
+		p.grounded = ground >= 0;
+		p.floating = ground < 0;
+		p.waterH = p.waterMean = 0;
+		p._camY = null;
+		return { ...target, mode: p.mode };
+
+	}
+
 	// ---------------------------------------------------------------- loop
 
 	start() {
@@ -746,6 +861,147 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	}
 
+	updateRegionalWeather() {
+
+		if ( ! this.clouds || REGIONAL_WEATHER_ISLANDS.length === 0 ) return;
+		const p = this.camera.position;
+		let distance = Infinity;
+		let nearest = null;
+		for ( const island of REGIONAL_WEATHER_ISLANDS ) {
+
+			const dx = wrappedWorldDelta( island.x, p.x );
+			const dz = wrappedWorldDelta( island.z, p.z );
+			const coastDistance = Math.hypot( dx, dz ) - Math.max( island.rx, island.rz );
+			if ( coastDistance < distance ) { distance = coastDistance; nearest = island; }
+
+		}
+		const now = performance.now();
+		// Hysteresis avoids repeatedly rebuilding the volumetric history at the cell edge. Once inside,
+		// each island rolls independent weather every 2-5 minutes: clear polar light, broken cloud and
+		// overcast are all possible instead of forcing permanent cloud cover.
+		if ( this._regionalWeatherActive && distance > REGIONAL_WEATHER_EXIT ) {
+
+			this._regionalWeatherActive = false;
+			this._regionalWeatherIsland = null;
+			this._regionalWeatherUntil = 0;
+			this.clouds.coverage.value = this._normalCloudCoverage;
+
+		} else if ( ! this._regionalWeatherActive && distance < REGIONAL_WEATHER_ENTER ) {
+
+			this._normalCloudCoverage = this.clouds.coverage.value;
+			this._regionalWeatherActive = true;
+			this._regionalWeatherUntil = 0;
+
+		} else if ( ! this._regionalWeatherActive ) this._normalCloudCoverage = this.clouds.coverage.value;
+
+		if ( this._regionalWeatherActive && nearest && ( nearest.id !== this._regionalWeatherIsland || now >= this._regionalWeatherUntil ) ) {
+
+			this._regionalWeatherIsland = nearest.id;
+			this._regionalWeatherUntil = now + ( 120 + Math.random() * 180 ) * 1000;
+			const states = REGIONAL_CLOUD_STATES[ nearest.climate ];
+			this.clouds.coverage.value = states[ Math.floor( Math.random() * states.length ) ];
+
+		}
+	}
+
+	updateStormWeather( dt ) {
+
+		const clouds = this.clouds;
+		const storm = this.stormWeather;
+		const local = this.waterspoutField?.weatherAt( this.camera.position );
+		if ( local?.spout ) {
+
+			storm.x = local.spout.x;
+			storm.z = local.spout.y;
+			storm.wind = local.wind;
+			storm.bgm = local.bgm;
+
+		} else {
+
+			storm.wind = 0;
+			storm.bgm = 0;
+
+		}
+
+		let coverage = clouds?.coverage.value ?? 0;
+		if ( clouds && local ) {
+
+			this._stormCoverageBase = coverage;
+			coverage = Math.max( coverage, coverage + ( 0.995 - coverage ) * local.cloud );
+			clouds.coverage.value = coverage;
+
+		}
+
+		// Any fully spread cloud deck rains, whether it came from a waterspout cell or regional
+		// weather.  Ease both onset and decay so sound and lens droplets never hard-cut at a radius.
+		const rainTarget = MathUtils.smoothstep( coverage, 0.88, 0.98 );
+		const response = rainTarget > this.rainIntensity ? 1.35 : 0.32;
+		this.rainIntensity += ( rainTarget - this.rainIntensity ) * ( 1 - Math.exp( - dt * response ) );
+		storm.rain = this.rainIntensity;
+		clouds?.setStormDeck?.( coverage >= 0.9 && ( local?.cloud ?? 0 ) > 0.12 );
+
+		if ( this.ui?.s && clouds && this.ui.s.clouds !== coverage ) {
+
+			this.ui.s.clouds = coverage;
+			this.ui.ui.refresh();
+
+		}
+
+	}
+
+	updateIslandEcology() {
+
+		const p = this.camera.position;
+		let nearest = null, nearestDistance = Infinity;
+		for ( let i = 1; i < ARCHIPELAGO.length; i ++ ) {
+
+			const source = ARCHIPELAGO[ i ];
+			const dx = wrappedWorldDelta( source.x, p.x ), dz = wrappedWorldDelta( source.z, p.z );
+			if ( Math.abs( dx ) > source.rx + 1800 || Math.abs( dz ) > source.rz + 1800 ) continue;
+			// Present a seam-adjacent copy in the camera's current torus cell so birds, fish and
+			// breaker geometry remain physically close to the viewer as the terrain shader wraps.
+			const nearX = p.x - dx, nearZ = p.z - dz;
+			const island = nearX === source.x && nearZ === source.z ? source : { ...source, x: nearX, z: nearZ };
+			const distance = Math.abs( islandDistance( island, p.x, p.z ).d );
+			if ( distance < nearestDistance ) { nearestDistance = distance; nearest = island; }
+
+		}
+		const active = nearestDistance < 1450 ? nearest : null;
+		const state = this._islandEcology || ( this._islandEcology = { island: null, breakersX: Infinity, breakersZ: Infinity, lifeX: Infinity, lifeZ: Infinity } );
+		if ( ! active ) {
+
+			this.satelliteBreakers.active = false;
+			if ( state.island ) {
+
+				this.reef.setFishHabitat( 0, 0 );
+				this.wildlife.setIslandHabitat( null );
+				state.island = null;
+
+			}
+			return;
+
+		}
+		const coast = islandCoastFrame( active, p.x, p.z, {} );
+		const changed = state.island !== active.id;
+		if ( changed || Math.hypot( coast.x - state.breakersX, coast.z - state.breakersZ ) > 70 ) {
+
+			this.satelliteBreakers.setStationSet( buildIslandShoreStrip( active, coast.x, coast.z, { count: 601, spacing: 0.8 } ) );
+			state.breakersX = coast.x; state.breakersZ = coast.z;
+
+		}
+		this.satelliteBreakers.active = true;
+		if ( changed || Math.hypot( coast.x - state.lifeX, coast.z - state.lifeZ ) > 500 ) {
+
+			const fishX = coast.x + coast.nx * 72, fishZ = coast.z + coast.nz * 72;
+			this.reef.setFishHabitat( fishX - WORLD.reef.center.x, fishZ - WORLD.reef.center.z );
+			this.wildlife.setIslandHabitat( active, coast );
+			state.lifeX = coast.x; state.lifeZ = coast.z;
+
+		}
+		state.island = active.id;
+
+	}
+
 	_frame( dt ) {
 
 		GPU.beginFrame();
@@ -757,7 +1013,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		if ( s.timeSpeed !== 0 ) s.timeOfDay = ( s.timeOfDay + dt * s.timeSpeed + 24 ) % 24;
 
 		// ---- player / boat (boat physics first so the cameras follow this frame's pose)
-		if ( this.input.hit( 'KeyF' ) ) {
+		const helmUsesFireMode = ! this.freeCam && this.artillery?.canDriverFire( this.player );
+		if ( this.input.hit( 'KeyF' ) && ! helmUsesFireMode ) {
 
 			if ( this.artillery?.active ) this.artillery.exit();
 			this.setFreeCam( ! this.freeCam );
@@ -771,17 +1028,50 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		}
 
-		if ( this.input.hit( 'KeyM' ) && this.audio ) {
+		if ( this.input.hit( 'KeyU' ) && this.audio ) {
 
 			this.audio.setMuted( ! this.audio.muted );
 			if ( this.ui ) this.ui.ui.toast( this.audio.muted ? 'Sound off' : 'Sound on' );
 
 		}
-		for ( const boat of this.boatCtls ) boat.update( dt );
+		for ( const boat of this.boatCtls ) {
+
+			boat.update( dt );
+			const shift = wrapWorldPosition( boat.position, this._worldShift );
+			if ( shift.dx || shift.dz ) {
+
+				boat.apply();
+				// The chase camera is smoothed in world space; carry its history through the seam so
+				// it does not attempt to fly 20 km across the chart after the boat wraps.
+				if ( this.player?.boat === boat && this.player.camPos ) {
+
+					this.player.camPos.x += shift.dx;
+					this.player.camPos.z += shift.dz;
+
+				}
+
+			}
+
+		}
 		this.boatSpray.update( dt );
 		this.wake.update( dt );
-		if ( this.freeCam ) this.fly.update( dt );
-		else this.player.update( dt );
+		if ( this.freeCam ) {
+
+			this.fly.update( dt );
+			wrapWorldPosition( this.camera.position, this._worldShift );
+
+		} else {
+
+			this.player.update( dt );
+			const shift = wrapWorldPosition( this.player.position, this._worldShift );
+			if ( shift.dx || shift.dz ) {
+
+				this.camera.position.x += shift.dx;
+				this.camera.position.z += shift.dz;
+
+			}
+
+		}
 		if ( this.player.mode !== 'cannon' ) this.artillery?.updateWorld( dt );
 		this.game.update( dt );
 		this.updateSun();
@@ -790,6 +1080,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.applyAtmosphereReadback();
 
 		// ---- water simulation
+		this.waterspoutField?.update( dt, this.camera.position );
 		this.fft.update( dt );
 		this.seaDetail.update( dt );
 		this.query.setCamera( this.camera.position.x, this.camera.position.z );
@@ -811,9 +1102,27 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.airMotes.update( dt, this.camera, this.cameraWaterHeight ?? 0 );
 		if ( this.shoreSim ) this.shoreSim.update();
 		this.underwaterLighting.update( this.camera );
+		this.updateIslandEcology();
 		this.breakers.update( this.camera );
+		this.satelliteBreakers.update( this.camera );
+		if ( this.waterspouts ) this.waterspouts.update( dt, this.camera );
+		if ( this.waterspoutParticles ) this.waterspoutParticles.update( dt, this.camera );
 		this.spray.update();
-		if ( this.clouds ) this.clouds.update( dt, this.camera );
+		if ( this.clouds ) {
+
+			// Regional weather owns the baseline.  The storm overlay is recomputed from that baseline
+			// each frame, preventing a previous 100% cover value from becoming permanent weather.
+			if ( this._stormCoverageBase !== null ) {
+
+				this.clouds.coverage.value = this._stormCoverageBase;
+				this._stormCoverageBase = null;
+
+			}
+			this.updateRegionalWeather();
+			this.updateStormWeather( dt );
+			this.clouds.update( dt, this.camera );
+
+		}
 		this.environment.update( dt );
 
 		// ---- world
@@ -825,21 +1134,6 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.village.update( dt );
 		if ( this.vegetation ) this.vegetation.update( dt, this.camera );
 		if ( this.whale ) this.whale.update( dt, this.camera );
-		// the umibozu rides the swell: height from the GPU water query (1-3 frames old), a slow heavy
-		// sway on the wave normal and a faint yaw drift, so it looms rather than sitting rigidly
-		if ( this.umibozu ) {
-
-			const u = this.umibozu;
-			this.query.setPoint( u.slot, u.group.position.x, u.group.position.z );
-			const r = this.query.cpuValid ? this.query.get( u.slot ) : null;
-			if ( r && Number.isFinite( r.height ) ) u.water += ( r.height - u.water ) * Math.min( 1, dt * 1.5 );
-			u.t += dt;
-			u.group.position.y = - 1.5 + u.water;
-			u.group.rotation.x = ( r ? - r.nz * 0.5 : 0 ) + Math.sin( u.t * 0.23 ) * 0.012;
-			u.group.rotation.z = ( r ? r.nx * 0.5 : 0 ) + Math.sin( u.t * 0.17 ) * 0.012;
-			u.group.rotation.y = Math.PI + Math.sin( u.t * 0.05 ) * 0.1;
-
-		}
 		this.boat.update( dt );
 		this.tallShip.update( dt );
 		for ( const cannon of this.tallShipCannons || [] ) cannon.update( dt );
@@ -849,7 +1143,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// ---- render
 		G.exposure.value = s.exposure;
 		updateCameraVelocity( this.camera );
-		this.post.lens.update( dt, this.camera.position.y < ( this.cameraWaterHeight ?? 0 ) );
+		this.post.lens.update( dt, this.camera.position.y < ( this.cameraWaterHeight ?? 0 ), this.rainIntensity );
 		if ( this.post.flare ) {
 
 			this.post.flare.setDepthHeight( this.sceneRenderer.sceneRT.height );
@@ -908,11 +1202,19 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			windDir: G.windDir.value,
 			daylight: 1 - G.night.value,
 			nearPier: Math.abs( p.x - WORLD.pier.x ) < 12 && p.z > WORLD.pier.zStart - 5 && p.z < WORLD.pier.zEnd + 8,
+			storm: this.stormWeather,
 			boat: {
 				active: this.player.boat.driven, rpm: this.player.boat.rpm, throttle: this.player.boat.throttle, speed: this.player.boat.velocity.length(),
 				position: this.player.boat.model.group.position, listenerInside: this.player.mode === 'boat' && this.player.camMode === 'first',
 			},
 		} );
+
+	}
+
+	spawnStormAt( x, z ) {
+
+		if ( ! this.waterspoutField ) return - 1;
+		return this.waterspoutField.spawnAt( wrapWorldCoordinate( x ), wrapWorldCoordinate( z ) );
 
 	}
 

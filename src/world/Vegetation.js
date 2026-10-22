@@ -211,7 +211,7 @@ export class Vegetation {
 		// renderer handle; the atlas bakes with its own MeshRenderer)
 		this.renderer = true;
 
-		this.grass = new GrassField( { terrain, mask: grassMask } );
+		this.grass = new GrassField( { terrain, mask: grassMask, site } );
 		for ( const m of this.grass.meshes ) this.group.add( m );
 
 		this.geometryTriangles = {

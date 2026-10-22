@@ -8,7 +8,7 @@ import { srgb, rot2, terrainShadingModule } from './terrain/TerrainShading.js';
 
 // = GrassField FADE_T0 (vegetation/GrassField.js): tier 0 blades drop out at random distances in
 // this range. Kept as a literal so the terrain doesn't pull in the grass field's shaders.
-const GRASS_FADE = [ 62, 87 ];
+const GRASS_FADE = [ 3800, 3990 ];
 
 // The former TerrainLightingModel (multiplies the key directional light by the soft heightfield
 // sun shadow: long hill shadows beyond the shadow map range and from terrain outside the view) is
@@ -34,12 +34,11 @@ export class Terrain {
 
 		this.data = terrainData;
 		this.gpu = terrainGPU;
-		const half = terrainData.size / 2;
-
 		this.lod = new CDLOD( {
-			gridSize, leafSize: 8, levels: 9,
+			gridSize, leafSize: 8, levels: 10,
 			heightBounds: ( x0, z0, x1, z1 ) => terrainData.boundsFor( x0, z0, x1, z1 ),
-			center: { x: - half, z: - half, size: terrainData.size },
+			// Follow the camera instead of ending at the old 2 km heightmap edge.  The outer LOD
+			// covers beyond WORLD.renderRadius in every direction.
 			rangeFactor,
 			prefix: 'terrainLod',
 		} );
@@ -164,6 +163,42 @@ fn terWetFoam( xz: vec2f, h: f32 ) -> vec2f {
 fn terDetail( uv: vec2f ) -> vec4f {
 	return textureSample( terrainDetailTex, smpAniso4Repeat, uv );
 }
+
+fn terRotate2( v: vec2f, c: f32, s: f32 ) -> vec2f {
+	return vec2f( v.x * c - v.y * s, v.x * s + v.y * c );
+}
+
+// Distance-filtered snow detail. God of War Ragnarök's snow work moved the broad form out of
+// screen-space parallax and into real geometry; this terrain already does that through CDLOD.
+// These three non-commensurate, rotated bands therefore only supply wind slab and crystal detail.
+// Explicit gradients select stable mips, and each finer band fades before its screen footprint can
+// alias into the square/checker pattern that a single world-aligned tile produced in the distance.
+fn terSnowDetail( xz: vec2f, dx: vec2f, dy: vec2f ) -> vec4f {
+	let footprint = max( length( dx ), length( dy ) );
+	let q0 = terRotate2( xz, 0.9323, 0.3616 ) / 83.0 + vec2f( 0.173, 0.619 );
+	let g0x = terRotate2( dx, 0.9323, 0.3616 ) / 83.0;
+	let g0y = terRotate2( dy, 0.9323, 0.3616 ) / 83.0;
+	let broad = textureSampleGrad( terrainDetailTex, smpAniso4Repeat, q0, g0x, g0y ).w;
+
+	let warp = ( broad - 0.5 ) * 9.0;
+	let q1 = terRotate2( xz + vec2f( warp, -warp * 0.57 ), 0.4536, -0.8912 ) / 19.7 + vec2f( 0.731, 0.287 );
+	let g1x = terRotate2( dx, 0.4536, -0.8912 ) / 19.7;
+	let g1y = terRotate2( dy, 0.4536, -0.8912 ) / 19.7;
+	let slab = textureSampleGrad( terrainDetailTex, smpAniso4Repeat, q1, g1x, g1y ).z;
+
+	let q2 = terRotate2( xz - vec2f( warp * 0.31, warp ), -0.7374, 0.6755 ) / 2.85 + vec2f( 0.419, 0.853 );
+	let g2x = terRotate2( dx, -0.7374, 0.6755 ) / 2.85;
+	let g2y = terRotate2( dy, -0.7374, 0.6755 ) / 2.85;
+	let crystal = textureSampleGrad( terrainDetailTex, smpAniso4Repeat, q2, g2x, g2y ).x;
+
+	let slabVisibility = 1.0 - smoothstep( 1.2, 7.0, footprint );
+	let crystalVisibility = 1.0 - smoothstep( 0.16, 1.35, footprint );
+	let grain = broad * 0.52 + mix( 0.5, slab, slabVisibility ) * 0.34
+		+ mix( 0.5, crystal, crystalVisibility ) * 0.14;
+	let relief = ( broad - 0.5 ) * 0.055 + ( slab - 0.5 ) * 0.05 * slabVisibility
+		+ ( crystal - 0.5 ) * 0.018 * crystalVisibility;
+	return vec4f( grain, relief, slabVisibility, crystalVisibility );
+}
 `;
 
 const TERRAIN_SURFACE = /* wgsl */`
@@ -226,6 +261,9 @@ const TERRAIN_SURFACE = /* wgsl */`
 		let reefD = length( xz - rc );
 		let reefW = 1.0 - smoothstep( ${ WORLD.reef.radius * 0.5 }, ${ WORLD.reef.radius * 1.15 }, reefD + ( mcr - 0.5 ) * 30.0 );
 		var under = mix( ${ S( 0.84, 0.78, 0.64 ) }, ${ S( 0.72, 0.7, 0.58 ) }, smoothstep( 1.0, 9.0, depth ) );
+		// Temperate shelves carry grey mineral sand; the polar shelf is basaltic/glacial sediment.
+		under = mix( under, mix( ${ S( 0.48, 0.47, 0.42 ) }, ${ S( 0.25, 0.28, 0.27 ) }, smoothstep( 2.0, 10.0, depth ) ), smoothstep( 0.25, 0.7, biome.w ) );
+		under = mix( under, mix( ${ S( 0.2, 0.21, 0.21 ) }, ${ S( 0.08, 0.095, 0.1 ) }, smoothstep( 1.0, 8.0, depth ) ), smoothstep( 0.78, 1.0, biome.w ) );
 		under = under * ( ( dM.w - 0.5 ) * 0.14 + 1.0 ) * ( ( grain - 0.45 ) * 0.25 + 1.0 );
 		// megaripple fields (~0.75 m) across the swell, troughs collect darker shell hash; not in
 		// the swash zone or the first metre of depth
@@ -338,16 +376,23 @@ const TERRAIN_SURFACE = /* wgsl */`
 		let underW = smoothstep( 0.12, -0.6, h );
 		let landW = 1.0 - underW;
 		let sandW = smoothstep( 0.3, 0.72, sp.x + ( dM.z - 0.5 ) * 0.5 + ( mcr - 0.5 ) * 0.35 ) * notRock;
-		let pathW = smoothstep( 0.28, 0.62, sp.y + ( dN.y - 0.45 ) * 0.4 + ( dM.w - 0.5 ) * 0.25 ) * notRock * landW
+		let pathDetailW = smoothstep( 0.28, 0.62, sp.y + ( dN.y - 0.45 ) * 0.4 + ( dM.w - 0.5 ) * 0.25 )
 			* ( 1.0 - smoothstep( 50.0, 220.0, camDist ) * 0.85 );
+		// Keep the authored path core readable from the editor's high overview camera. Fine edge noise
+		// still fades with distance, but a painted road no longer disappears almost completely.
+		let pathW = max( pathDetailW, smoothstep( 0.3, 0.75, sp.y ) * 0.82 ) * notRock * landW;
 		// forest on the higher / steeper ground and in the gullies, tall-grass meadow on the valley
 		// floor and around the village (same classification as the vegetation's land cover)
 		var jungleW = sat( smoothstep( 9.0, 24.0, h + ( mcr - 0.5 ) * 18.0 ) + smoothstep( 0.18, 0.36, slope ) + gully * 0.6 );
 		// Red forces open meadow, green forces forest. Both are authored overrides layered over the
 		// procedural tropical classification, so an untouched map keeps its original appearance.
 		jungleW = sat( jungleW * ( 1.0 - biome.x ) + biome.y );
-		let snowW = smoothstep( 0.04, 0.82, biome.z + ( dM.w - 0.5 ) * 0.22 + ( dN.z - 0.5 ) * 0.12 )
+		var snowDetail = vec4f( 0.5, 0.0, 0.0, 0.0 );
+		if ( biome.z > 0.001 || biome.w > 0.78 ) { snowDetail = terSnowDetail( xz, dpx.xz, dpy.xz ); }
+		let snowW = smoothstep( 0.04, 0.82, biome.z + ( macroA - 0.5 ) * 0.15 + ( macroB - 0.5 ) * 0.08 )
 			* landW * smoothstep( 0.08, 0.34, N0.y );
+		let polarW = smoothstep( 0.8, 1.0, biome.w );
+		let glacierW = sat( biome.y ) * polarW * landW * smoothstep( 0.12, 0.55, snowW );
 		// landslide scars: raw red-brown laterite in streaks down steep slopes, rare
 		let lateriteW = smoothstep( 0.62, 0.74, scar + ( macroB - 0.5 ) * 0.3 ) * smoothstep( 0.3, 0.42, slope )
 			* smoothstep( 0.52, 0.66, mcr ) * notRock * 0.85;
@@ -356,6 +401,9 @@ const TERRAIN_SURFACE = /* wgsl */`
 		let dryK = smoothstep( 0.8, 3.0, h );
 		var sand = mix( ${ S( 0.83, 0.75, 0.6 ) }, ${ S( 0.9, 0.84, 0.72 ) }, smoothstep( 0.3, 0.72, mcr + dryK * 0.2 ) );
 		sand = mix( sand, ${ S( 0.84, 0.72, 0.55 ) }, smoothstep( 0.55, 0.8, dM.w + ( macroB - 0.5 ) * 0.6 ) * 0.45 );
+		// Climate channel: warm coral sand -> temperate grey strand -> Icelandic black frozen beach.
+		sand = mix( sand, mix( ${ S( 0.48, 0.46, 0.4 ) }, ${ S( 0.32, 0.33, 0.31 ) }, dM.w ), smoothstep( 0.25, 0.7, biome.w ) );
+		sand = mix( sand, mix( ${ S( 0.12, 0.12, 0.115 ) }, ${ S( 0.035, 0.04, 0.043 ) }, dM.w ), smoothstep( 0.78, 1.0, biome.w ) );
 		sand = sand * ( ( dM.w - 0.5 ) * 0.16 + 1.0 ) * ( ( dN.w - 0.5 ) * 0.1 + 1.0 );
 		sand = sand * ( ( grain - 0.45 ) * 0.3 + 0.97 ) * ( ( grainF - 0.45 ) * 0.2 + 1.0 );
 		// disturbed / trodden patches: slightly darker, coarser sand (footfall, crabs, wind scour)
@@ -364,7 +412,8 @@ const TERRAIN_SURFACE = /* wgsl */`
 		// the high-water band collects shell grit, coral bits and dried seaweed
 		let hw = h + ( dM.w - 0.5 ) * 0.5;
 		let wrackBand = smoothstep( 1.15, 1.4, hw ) * smoothstep( 2.1, 1.7, hw );
-		let pebDensity = smoothstep( 0.62, 0.85, macroB + dM.w * 0.3 ) * 0.2 + wrackBand * smoothstep( 0.3, 0.6, dM.y );
+		var pebDensity = smoothstep( 0.62, 0.85, macroB + dM.w * 0.3 ) * 0.2 + wrackBand * smoothstep( 0.3, 0.6, dM.y );
+		pebDensity += smoothstep( 0.8, 1.0, biome.w ) * sandW * landW * 0.28;
 		let pebW = smoothstep( 0.66, 0.8, dN.z ) * sat( pebDensity ) * smoothstep( 0.6, 0.9, sp.x ) * landW
 			* ( 1.0 - smoothstep( 12.0, 35.0, camDist ) );
 		let pebCol = mix( mix( ${ S( 0.86, 0.82, 0.74 ) }, ${ S( 0.78, 0.64, 0.6 ) }, smoothstep( 0.45, 0.75, dM.x ) ), ${ S( 0.36, 0.33, 0.3 ) }, smoothstep( 0.74, 0.82, dM.y ) );
@@ -397,6 +446,8 @@ const TERRAIN_SURFACE = /* wgsl */`
 			let reefD = length( xz - rc );
 			let reefW = 1.0 - smoothstep( ${ WORLD.reef.radius * 0.5 }, ${ WORLD.reef.radius * 1.15 }, reefD + ( mcr - 0.5 ) * 30.0 );
 			under = mix( ${ S( 0.84, 0.78, 0.64 ) }, ${ S( 0.72, 0.7, 0.58 ) }, smoothstep( 1.0, 9.0, depth ) );
+			under = mix( under, mix( ${ S( 0.48, 0.47, 0.42 ) }, ${ S( 0.25, 0.28, 0.27 ) }, smoothstep( 2.0, 10.0, depth ) ), smoothstep( 0.25, 0.7, biome.w ) );
+			under = mix( under, mix( ${ S( 0.2, 0.21, 0.21 ) }, ${ S( 0.08, 0.095, 0.1 ) }, smoothstep( 1.0, 8.0, depth ) ), smoothstep( 0.78, 1.0, biome.w ) );
 			under = under * ( ( dM.w - 0.5 ) * 0.14 + 1.0 ) * ( ( grain - 0.45 ) * 0.25 + 1.0 );
 			// megaripple fields (~0.75 m) across the swell, troughs collect darker shell hash; not in
 			// the swash zone or the first metre of depth
@@ -491,6 +542,10 @@ const TERRAIN_SURFACE = /* wgsl */`
 			jungle = mix( jungle, canopy, canopyW );
 		}
 		var ground = mix( lawn, jungle, jungleW );
+		// Faroe-like cool turf replaces the tropical ground palette. Polar ground is frozen grey
+		// mineral crust beneath the ice, never a green tundra band.
+		ground = mix( ground, mix( ${ S( 0.16, 0.22, 0.11 ) }, ${ S( 0.3, 0.34, 0.2 ) }, clump ), smoothstep( 0.3, 0.7, biome.w ) );
+		ground = mix( ground, mix( ${ S( 0.1, 0.11, 0.12 ) }, ${ S( 0.32, 0.38, 0.4 ) }, clump ), smoothstep( 0.8, 1.0, biome.w ) );
 		// around the bare rock: dark humus, stones and moss, with the surrounding plants creeping
 		// in (a soft, noisy band; no speckle)
 		let creepIn = smoothstep( 0.4, 0.75, dM.w + ( dN.y - 0.45 ) * 0.5 + ( macroB - 0.5 ) * 0.3 );
@@ -583,10 +638,19 @@ const TERRAIN_SURFACE = /* wgsl */`
 		var residue = sat( wetFoam.y ) * landW * notRock;
 		if ( residue > 0.0 ) { residue *= smoothstep( 0.42, 0.18, terDetail( ${ rot2( 'xz', 0.4 ) } / 0.9 ).x ) * 0.7 + 0.3; }
 		albedo = mix( albedo, ${ S( 0.88, 0.9, 0.9 ) }, residue );
-		// Painted snow keeps a cold blue-grey base in cavities and a warmer sun-facing crust. The
-		// two detail scales break up the edge and stop broad painted areas reading as flat white.
-		let snowGrain = dF.z * 0.55 + dN.w * 0.45;
+		// Snow keeps a cold blue-grey base in cavities and a warmer wind-packed crust. Its broad form
+		// comes from the displaced terrain; only filtered, rotated microdetail is shaded here.
+		let snowGrain = snowDetail.x;
 		var snow = mix( ${ S( 0.68, 0.76, 0.79 ) }, ${ S( 0.94, 0.95, 0.91 ) }, smoothstep( 0.28, 0.72, snowGrain + N0.y * 0.18 ) );
+		snow = mix( snow, mix( ${ S( 0.5, 0.68, 0.73 ) }, ${ S( 0.93, 0.96, 0.96 ) }, smoothstep( 0.25, 0.75, snowGrain ) ), smoothstep( 0.8, 1.0, biome.w ) );
+		// Valley glaciers expose blue compact ice. Warped transverse bands become deep crevasses,
+		// with a weaker crossing set that keeps them fractured rather than perfectly parallel.
+		let crackA = 1.0 - smoothstep( 0.025, 0.13, abs( sin( xz.x * 0.037 + xz.y * 0.008 + snowDetail.x * 5.0 ) ) );
+		let crackB = 1.0 - smoothstep( 0.018, 0.095, abs( sin( xz.x * 0.012 - xz.y * 0.043 + snowDetail.x * 4.0 ) ) );
+		let glacierCracks = sat( max( crackA, crackB * 0.55 ) * smoothstep( 0.28, 0.82, biome.y ) * snowDetail.z );
+		var glacierIce = mix( ${ S( 0.24, 0.52, 0.65 ) }, ${ S( 0.72, 0.88, 0.91 ) }, smoothstep( 0.25, 0.78, snowGrain + N0.y * 0.12 ) );
+		glacierIce = mix( glacierIce, ${ S( 0.055, 0.19, 0.27 ) }, glacierCracks * 0.82 );
+		snow = mix( snow, glacierIce, glacierW * 0.92 );
 		snow *= 0.94 + dM.w * 0.1;
 		albedo = mix( albedo, snow, snowW );
 
@@ -600,6 +664,7 @@ const TERRAIN_SURFACE = /* wgsl */`
 		rough = mix( rough, 0.75, underW );
 		rough = mix( rough, 0.94, scarpW );
 		rough = mix( rough, 0.82, snowW );
+		rough = mix( rough, 0.38, glacierW * ( 1.0 - glacierCracks * 0.45 ) );
 		outRough = rough;
 
 		// ---- micro relief for the normal
@@ -618,7 +683,9 @@ const TERRAIN_SURFACE = /* wgsl */`
 		hd = mix( hd, sandH + seabedH, max( sandW, underW * notRock ) );
 		hd = mix( hd, rockHd, rockW );
 		hd = mix( hd, scarpH, scarpW );
-		hd = mix( hd, dF.z * 0.012 + dN.w * 0.035 + dM.w * 0.08, snowW );
+		hd = mix( hd, snowDetail.y, snowW );
+		let glacierH = snowDetail.y * 0.62 - glacierCracks * 0.075;
+		hd = mix( hd, glacierH, glacierW );
 		hdOut = hd;
 
 		// ---- ambient occlusion: baked horizon + cavity, plus litter / crevices / seagrass canopy
@@ -632,6 +699,21 @@ const TERRAIN_SURFACE = /* wgsl */`
 	}
 
 	outN = terrainPerturbNormal( p, N0, hdOut, 1.0 );
+	// Blast damage is the final terrain layer. The crater's analytic slope corrects the otherwise
+	// static baked macro normal; soot then remains visible over snow, glacier ice, wetness and every
+	// biome material. A shell that struck land stays charred even if the new cavity dips below sea
+	// level -- direct water impacts are rejected before a crater is registered.
+	let scorch = terrainCraterScorch( xz );
+	if ( scorch > 0.001 ) {
+		let craterN = terrainCraterNormal( xz, N0 );
+		outN = normalize( mix( outN, craterN, smoothstep( 0.03, 0.35, scorch ) ) );
+	}
+	let sootVariation = textureSampleLevel( terrainDetailTex, smpLinearRepeat, xz / 3.7, 0.0 ).w;
+	let charPores = textureSampleLevel( terrainDetailTex, smpLinearRepeat, xz / 0.47 + vec2f( 0.31, 0.73 ), 0.0 ).x;
+	let soot = vec3f( 0.006, 0.0045, 0.0035 ) * ( 0.62 + sootVariation * 0.42 + charPores * 0.13 );
+	albedoOut = mix( albedoOut, soot, scorch * 0.975 );
+	outRough = mix( outRough, 0.94 + charPores * 0.045, scorch );
+	outAO *= 1.0 - scorch * 0.32;
 
 	s.albedo = albedoOut;
 	s.roughness = outRough;

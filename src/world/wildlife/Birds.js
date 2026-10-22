@@ -1,6 +1,7 @@
 import * as THREE from '../../engine/index.js';
 import { G } from '../../core/Globals.js';
 import { WORLD } from '../WorldLayout.js';
+import { buildIslandShoreStrip } from '../Archipelago.js';
 import { SPRAY } from '../../fx/Spray.js';
 import { mulberry32 } from '../../util/Noise.js';
 import { BIRD } from './BirdShapes.js';
@@ -41,6 +42,8 @@ export class Birds {
 		this.time = 0;
 		this.agents = [];
 		this.perches = this.buildPerches( village, colliders );
+		this.mainPerches = this.perches;
+		this.habitat = { id: 'tidewater', x: 0, z: 0 };
 		this.wind = new THREE.Vector2();
 
 		const rng = this.rng;
@@ -100,6 +103,57 @@ export class Birds {
 		} );
 
 		for ( const a of this.agents ) a.f.P.fresh = true;
+
+	}
+
+	setIslandHabitat( island, coast = null ) {
+
+		const main = ! island || island.id === 'tidewater';
+		const x = main ? 0 : coast?.x ?? island.x;
+		const z = main ? 0 : coast?.z ?? island.z;
+		if ( this.habitat.id === ( main ? 'tidewater' : island.id ) && Math.hypot( x - this.habitat.x, z - this.habitat.z ) < 500 ) return;
+		for ( const p of this.perches ) p.bird = null;
+		this.habitat = { id: main ? 'tidewater' : island.id, x, z };
+		if ( main ) this.perches = this.mainPerches;
+		else {
+
+			const strip = buildIslandShoreStrip( island, x, z, { count: 21, spacing: 18 } );
+			this.perches = [];
+			for ( let i = 1; i < strip.count - 1; i ++ ) {
+
+				const k = i * 4, nx = strip.data[ k + 2 ], nz = strip.data[ k + 3 ];
+				const px = strip.data[ k ] - nx * 6, pz = strip.data[ k + 1 ] - nz * 6;
+				const y = this.terrain.heightAt( px, pz );
+				if ( y > - 0.15 ) this.perches.push( { x: px, y: Math.max( 0.04, y ), z: pz, kind: 'sand', kinds: [ 'gull', 'pelican' ], bird: null, yawJitter: ( this.rng() - 0.5 ) * 0.8 } );
+
+			}
+
+		}
+		for ( const a of this.agents ) {
+
+			this.unperch( a );
+			a.visible = true;
+			a.f.P.fresh = true;
+			if ( a.kind === 'gull' ) this.startRoam( a, x + ( this.rng() - 0.5 ) * 180, 10 + this.rng() * 22, z + ( this.rng() - 0.5 ) * 150 );
+			else if ( a.kind === 'tern' ) {
+
+				a.lane.x0 = x - 170; a.lane.x1 = x + 170; a.lane.z = z + ( a.id % 4 - 1.5 ) * 22;
+				a.state = 'patrol'; a.t = 3 + this.rng() * 8;
+				a.f.place( x + ( this.rng() - 0.5 ) * 180, a.lane.y, a.lane.z, this.rng() < 0.5 ? Math.PI / 2 : - Math.PI / 2 );
+
+			} else if ( a.kind === 'pelican' && ! this.squad.includes( a ) ) this.startForage( a, x + ( this.rng() - 0.5 ) * 140, z + ( this.rng() - 0.5 ) * 120 );
+			else if ( a.kind === 'frigate' ) {
+
+				a.home = { x: x + ( this.rng() - 0.5 ) * 220, z: z + ( this.rng() - 0.5 ) * 180 };
+				a.circle.x = a.home.x; a.circle.z = a.home.z;
+				a.f.place( a.home.x + a.circle.r, a.circle.y, a.home.z, 0 );
+
+			}
+
+		}
+		this.squadPath = this.buildSquadPath( x, z, main );
+		this.squadS = this.rng() * this.squadPath.length;
+		for ( const a of this.squad ) { a.state = 'line'; a.f.P.fresh = true; }
 
 	}
 
@@ -611,9 +665,10 @@ export class Birds {
 		// mostly over the beach and the bay, now and then along the shore at low level, and often
 		// somewhere near the people on the beach (gulls know where food comes from)
 		const k = r();
-		if ( viewer && k < 0.35 ) a.goal = { x: viewer.x + ( r() - 0.5 ) * 70, y: 7 + r() * 12, z: Math.max( viewer.z + ( r() - 0.5 ) * 50, - 75 ) };
-		else if ( k < 0.6 ) a.goal = { x: - 120 + r() * 280, y: 4 + r() * 5, z: - 38 + r() * 12 };
-		else a.goal = { x: - 150 + r() * 380, y: 8 + r() * 30, z: - 70 + r() * 190 };
+		const h = this.habitat;
+		if ( viewer && k < 0.35 ) a.goal = { x: viewer.x + ( r() - 0.5 ) * 70, y: 7 + r() * 12, z: viewer.z + ( r() - 0.5 ) * 50 };
+		else if ( k < 0.6 ) a.goal = { x: h.x - 140 + r() * 280, y: 4 + r() * 5, z: h.z - 18 + r() * 35 };
+		else a.goal = { x: h.x - 190 + r() * 380, y: 8 + r() * 30, z: h.z - 120 + r() * 240 };
 		a.t = 20 + r() * 20;
 
 	}
@@ -788,19 +843,19 @@ export class Birds {
 
 	// ------------------------------------------------------------------ pelicans
 
-	buildSquadPath() {
+	buildSquadPath( ox = 0, oz = 0, hasPier = true ) {
 
 		// closed loop: skimming leg along the swell just outside the break, a wide turn out to sea,
 		// a higher return leg further out and back in (points: x, z, height above the water)
 		const pts = [];
 		// up and over the pier
-		const pier = ( x ) => 5.8 * Math.exp( - Math.pow( ( x - WORLD.pier.x ) / 11, 2 ) );
+		const pier = ( x ) => hasPier ? 5.8 * Math.exp( - Math.pow( ( x - WORLD.pier.x ) / 11, 2 ) ) : 0;
 		const leg = ( x0, x1, z, h, n ) => {
 
 			for ( let i = 0; i <= n; i ++ ) {
 
 				const x = lerp( x0, x1, i / n );
-				pts.push( [ x, z + Math.sin( i * 0.9 ) * 3, h + ( z < 45 ? pier( x ) : 0 ) ] );
+				pts.push( [ x + ox, z + oz + Math.sin( i * 0.9 ) * 3, h + ( z < 45 ? pier( x ) : 0 ) ] );
 
 			}
 
@@ -810,7 +865,7 @@ export class Birds {
 		for ( let i = 1; i < 8; i ++ ) {
 
 			const a = - Math.PI / 2 + i / 8 * Math.PI;
-			pts.push( [ 230 + Math.cos( a ) * 50, 66 + Math.sin( a ) * 50, 1.1 + i * 0.6 ] );
+			pts.push( [ ox + 230 + Math.cos( a ) * 50, oz + 66 + Math.sin( a ) * 50, 1.1 + i * 0.6 ] );
 
 		}
 
@@ -818,7 +873,7 @@ export class Birds {
 		for ( let i = 1; i < 8; i ++ ) {
 
 			const a = Math.PI / 2 + i / 8 * Math.PI;
-			pts.push( [ - 210 + Math.cos( a ) * 50, 66 + Math.sin( a ) * 50, 5 - i * 0.55 ] );
+			pts.push( [ ox - 210 + Math.cos( a ) * 50, oz + 66 + Math.sin( a ) * 50, 5 - i * 0.55 ] );
 
 		}
 
@@ -932,7 +987,7 @@ export class Birds {
 							a.perch = p;
 							p.bird = a;
 
-						} else this.startForage( a, - 60 + this.rng() * 200, 10 + this.rng() * 70 );
+						} else this.startForage( a, this.habitat.x - 100 + this.rng() * 200, this.habitat.z - 35 + this.rng() * 70 );
 
 					}
 

@@ -27,15 +27,10 @@ export const UPGRADES = {
 		{ cost: 120, label: 'Ice chest', holdKg: 70 },
 		{ cost: 400, label: 'Insulated fish hold', holdKg: 160 },
 	] },
-	fuel: { name: 'Fuel tank', levels: [
-		{ cost: 0, label: '40 L tank', fuelL: 40 },
-		{ cost: 150, label: '80 L tank', fuelL: 80 },
-		{ cost: 380, label: '150 L tank', fuelL: 150 },
-	] },
 	engine: { name: 'Engine', levels: [
-		{ cost: 0, label: 'Tired diesel', speedMul: 1 },
-		{ cost: 300, label: 'Rebuilt diesel', speedMul: 1.15 },
-		{ cost: 700, label: 'Turbo diesel', speedMul: 1.3 },
+		{ cost: 0, label: 'Tired diesel', thrustMul: 1 },
+		{ cost: 300, label: 'Rebuilt diesel', thrustMul: 1.15 },
+		{ cost: 700, label: 'Turbo diesel', thrustMul: 1.3 },
 	] },
 	fishFinder: { name: 'Fish finder', levels: [
 		{ cost: 0, label: 'None', finder: false },
@@ -47,11 +42,20 @@ export const UPGRADES = {
 	] },
 };
 
-export const FUEL_PRICE = 1.5; // $ per litre of diesel at the chandlery
-// litres per second at the helm: idle plus a lot more at full rpm (40 L lasts ~25 min flat out)
-export function fuelBurn( rpm ) {
+const UPGRADE_ZH = {
+	line: [ '鱼线', '8 磅尼龙线', '15 磅尼龙线', '30 磅编织线', '60 磅编织线' ],
+	reel: [ '卷线器', '旧纺车轮', '顺滑纺车轮', '鼓式卷线器' ],
+	rod: [ '鱼竿', '旧鱼竿', '7 英尺石墨竿', '9 英尺海钓竿' ],
+	hold: [ '鱼舱', '冰箱', '保冷箱', '隔热鱼舱' ],
+	engine: [ '发动机', '老旧柴油机', '翻新柴油机', '涡轮柴油机' ],
+	fishFinder: [ '探鱼器', '无', '探鱼器（在界面显示水深与鱼群）' ],
+	lights: [ '船灯', '仅航行灯', '夜间垂钓用甲板泛光灯' ],
+};
+for ( const key in UPGRADE_ZH ) {
 
-	return 0.0025 + 0.024 * rpm * rpm;
+	const [ name, ...levels ] = UPGRADE_ZH[ key ];
+	UPGRADES[ key ].name = name;
+	levels.forEach( ( label, index ) => { UPGRADES[ key ].levels[ index ].label = label; } );
 
 }
 

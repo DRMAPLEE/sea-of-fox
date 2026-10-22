@@ -123,8 +123,8 @@ function skyAt( hour ) {
 
 }
 
-const PHASES = [ [ 4.8, 'Night' ], [ 5.6, 'Dawn' ], [ 6.4, 'Sunrise' ], [ 7.2, 'Golden hour' ], [ 10.5, 'Morning' ],
-	[ 13.5, 'Midday' ], [ 16.8, 'Afternoon' ], [ 17.6, 'Golden hour' ], [ 18.4, 'Sunset' ], [ 19.3, 'Dusk' ], [ 24, 'Night' ] ];
+const PHASES = [ [ 4.8, '夜晚' ], [ 5.6, '黎明' ], [ 6.4, '日出' ], [ 7.2, '黄金时刻' ], [ 10.5, '上午' ],
+	[ 13.5, '正午' ], [ 16.8, '下午' ], [ 17.6, '黄金时刻' ], [ 18.4, '日落' ], [ 19.3, '黄昏' ], [ 24, '夜晚' ] ];
 
 const phaseAt = ( hh ) => {
 
@@ -142,7 +142,7 @@ const fmtClock = ( hours ) => {
 
 // ── HUD helpers ─────────────────────────────────────────────────────────────
 
-const CARDINALS = [ 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW' ];
+const CARDINALS = [ '北', '东北', '东', '东南', '南', '西南', '西', '西北' ];
 
 function modeIcon( label ) {
 
@@ -333,11 +333,11 @@ class Control {
 		if ( tooltip ) {
 
 			txt.dataset.tip = tooltip;
-			txt.dataset.tipHint = 'Double-click to reset';
+			txt.dataset.tipHint = '双击恢复默认值';
 
 		}
 
-		const rst = h( 'button', 'tw-reset', { type: 'button', tabindex: '-1', 'aria-label': `Reset ${ text }`, 'data-tip': 'Reset to default', html: icon( 'reset' ) } );
+		const rst = h( 'button', 'tw-reset', { type: 'button', tabindex: '-1', 'aria-label': `重置${ text }`, 'data-tip': '恢复默认值', html: icon( 'reset' ) } );
 		rst.addEventListener( 'click', ( e ) => {
 
 			e.stopPropagation();
@@ -398,7 +398,7 @@ class SliderControl extends Control {
 
 		const head = h( 'div', 'tw-row' );
 		head.append( this._makeLabel( this.label, o.tooltip ) );
-		this.valueEl = h( 'button', 'tw-value', { type: 'button', tabindex: '-1', 'data-tip': 'Click to type a value' } );
+		this.valueEl = h( 'button', 'tw-value', { type: 'button', tabindex: '-1', 'data-tip': '点击输入数值' } );
 		head.append( this.valueEl );
 
 		this.track = h( 'div', 'tw-slider', { role: 'slider', tabindex: '0', 'aria-label': this.label, 'aria-valuemin': min, 'aria-valuemax': max } );
@@ -1313,7 +1313,7 @@ function todSVG( id ) {
 	const labels = [ [ '06', cx - rx, cy + 13 ], [ '12', cx, cy - up - 7 ], [ '18', cx + rx, cy + 13 ], [ '00', cx, cy + down + 11 ] ]
 		.map( ( [ t, x, y ] ) => `<text x="${ x }" y="${ y }">${ t }</text>` ).join( '' );
 
-	return `<svg class="tw-tod-svg" viewBox="0 0 ${ w } ${ h }" role="slider" tabindex="0" aria-label="Time of day" aria-valuemin="0" aria-valuemax="24">
+	return `<svg class="tw-tod-svg" viewBox="0 0 ${ w } ${ h }" role="slider" tabindex="0" aria-label="一天中的时间" aria-valuemin="0" aria-valuemax="24">
 		<defs>
 			<linearGradient id="${ id }-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c74c6"/><stop offset="1" stop-color="#c2e4f6"/></linearGradient>
 			<linearGradient id="${ id }-sea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d2a3a"/><stop offset="1" stop-color="#03101a"/></linearGradient>
@@ -1360,14 +1360,14 @@ class TimeOfDayControl extends Control {
 
 	constructor( parent, o ) {
 
-		super( parent, Object.assign( {}, o, { label: o.label ?? 'Time of day' } ), 'time' );
+		super( parent, Object.assign( {}, o, { label: o.label ?? '一天中的时间' } ), 'time' );
 		this._default = Number( this.value ) || 0;
 		this.onFinishChange = o.onFinishChange || null;
 		const id = uid( 'tw-tod' );
 
 		const head = h( 'div', 'tw-row' );
 		head.append( this._makeLabel( this.label, o.tooltip ) );
-		this.valueEl = h( 'button', 'tw-value tw-clock', { type: 'button', tabindex: '-1', 'data-tip': 'Click to type a time' } );
+		this.valueEl = h( 'button', 'tw-value tw-clock', { type: 'button', tabindex: '-1', 'data-tip': '点击输入时间' } );
 		head.append( this.valueEl );
 
 		const dial = h( 'div', 'tw-tod' );
@@ -1925,11 +1925,11 @@ export class UI {
 		const tl = h( 'div', 'tw-tl' );
 		const stats = this.statsEl = h( 'div', 'tw-stats tw-glass', { 'data-level': 'good', 'aria-hidden': 'true' } );
 		stats.innerHTML = `
-			<div class="tw-stats-main"><span class="tw-fps">--</span><span class="tw-fps-unit">fps</span></div>
+			<div class="tw-stats-main"><span class="tw-fps">--</span><span class="tw-fps-unit">帧/秒</span></div>
 			<canvas class="tw-spark"></canvas>
 			<div class="tw-stats-sub">
-				<span class="tw-kv"><span class="tw-k">frame</span><span class="tw-v tw-ms">--</span></span>
-				<span class="tw-kv tw-kv-gpu" hidden><span class="tw-k">gpu</span><span class="tw-v tw-gpu">--</span></span>
+				<span class="tw-kv"><span class="tw-k">帧耗时</span><span class="tw-v tw-ms">--</span></span>
+				<span class="tw-kv tw-kv-gpu" hidden><span class="tw-k">显卡</span><span class="tw-v tw-gpu">--</span></span>
 			</div>`;
 		this.fpsEl = stats.querySelector( '.tw-fps' );
 		this.msEl = stats.querySelector( '.tw-ms' );
@@ -1938,7 +1938,7 @@ export class UI {
 		this.sparkEl = stats.querySelector( '.tw-spark' );
 
 		const brand = h( 'div', 'tw-brand' );
-		brand.innerHTML = `${ brandMark() }<span class="tw-brand-name">TIDEWATER</span>`;
+		brand.innerHTML = `${ brandMark() }<span class="tw-brand-name">潮汐水域</span>`;
 		this.modeEl = h( 'div', 'tw-mode is-empty', { role: 'status' } );
 		this.modeIco = h( 'span', 'tw-mode-ico' );
 		this.modeText = h( 'span', 'tw-mode-text' );
@@ -1965,7 +1965,7 @@ export class UI {
 			<span class="tw-depth-mark"></span>
 			<div class="tw-depth-read">
 				<div class="tw-depth-line"><span class="tw-depth-num">0.0</span><span class="tw-unit">m</span></div>
-				<span class="tw-g-lab">Depth</span>
+				<span class="tw-g-lab">深度</span>
 			</div>`;
 		this.depthCanvas = this.depthEl.querySelector( '.tw-depth-tape' );
 		this.depthNum = this.depthEl.querySelector( '.tw-depth-num' );
@@ -1974,7 +1974,7 @@ export class UI {
 
 		// the one element that survives photo mode
 		this.photoHint = h( 'div', 'tw-photo-hint' );
-		this.photoHint.innerHTML = '<kbd>P</kbd><span>Exit photo mode</span>';
+		this.photoHint.innerHTML = '<kbd>P</kbd><span>退出拍照模式</span>';
 
 		this.root.append( hud, this.photoHint );
 
@@ -2013,7 +2013,7 @@ export class UI {
 
 		}
 
-		for ( const [ t, d ] of [ [ 'N', 0 ], [ 'E', 90 ], [ 'S', 180 ], [ 'W', 270 ] ] ) {
+		for ( const [ t, d ] of [ [ '北', 0 ], [ '东', 90 ], [ '南', 180 ], [ '西', 270 ] ] ) {
 
 			const [ x, y ] = P( 50, 29, d - 90 );
 			card += `<text class="${ t === 'N' ? 'is-n' : '' }" x="${ x }" y="${ y }" transform="rotate(${ d } ${ x } ${ y })">${ t }</text>`;
@@ -2036,7 +2036,7 @@ export class UI {
 					<circle class="tw-dial-head" r="3" cx="24.64" cy="95.36"/>
 					<text class="tw-dial-rpm" x="60" y="105">rpm 0%</text>
 				</svg>
-				<div class="tw-dial-center"><span class="tw-speed">0.0</span><span class="tw-g-unit">knots</span></div>
+				<div class="tw-dial-center"><span class="tw-speed">0.0</span><span class="tw-g-unit">节</span></div>
 			</div>
 			<div class="tw-compass">
 				<svg viewBox="0 0 100 100">
@@ -2044,7 +2044,7 @@ export class UI {
 					<g class="tw-compass-card">${ card }</g>
 					<path class="tw-lubber" d="M45.5 1.5h9L50 8.5z"/>
 				</svg>
-				<div class="tw-hdg"><span class="tw-hdg-num">000°</span><span class="tw-hdg-card">N</span></div>
+				<div class="tw-hdg"><span class="tw-hdg-num">000°</span><span class="tw-hdg-card">北</span></div>
 			</div>`;
 		this.bThrPos = el.querySelector( '.tw-thr-pos' );
 		this.bThrNeg = el.querySelector( '.tw-thr-neg' );
@@ -2062,11 +2062,11 @@ export class UI {
 
 	_buildPanel() {
 
-		const panel = this.panel = h( 'aside', 'tw-panel tw-glass tw-interactive', { 'aria-label': 'Settings' } );
+		const panel = this.panel = h( 'aside', 'tw-panel tw-glass tw-interactive', { 'aria-label': '设置' } );
 		panel.inert = true;
 
 		const head = h( 'header', 'tw-panel-head' );
-		head.append( h( 'div', 'tw-panel-title', { text: 'Settings' } ) );
+		head.append( h( 'div', 'tw-panel-title', { text: '设置' } ) );
 		const actions = h( 'div', 'tw-panel-actions' );
 		const action = ( name, tip, fn ) => {
 
@@ -2076,12 +2076,12 @@ export class UI {
 
 		};
 
-		action( 'viewfinder', 'Photo mode (P)', () => this.setPhotoMode( true ) );
-		action( 'help', 'Controls (F1)', () => this.toggleHelp() );
-		action( 'chevrons-right', 'Collapse (H)', () => this.togglePanel( false ) );
+		action( 'viewfinder', '拍照模式（P）', () => this.setPhotoMode( true ) );
+		action( 'help', '操作说明（F1）', () => this.toggleHelp() );
+		action( 'chevrons-right', '收起（H）', () => this.togglePanel( false ) );
 		head.append( actions );
 
-		this.tabBar = h( 'div', 'tw-tabs', { role: 'tablist', 'aria-label': 'Settings sections' } );
+		this.tabBar = h( 'div', 'tw-tabs', { role: 'tablist', 'aria-label': '设置分类' } );
 		this.tabBar.addEventListener( 'keydown', ( e ) => {
 
 			const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? - 1 : 0;
@@ -2103,15 +2103,15 @@ export class UI {
 		this.pages = h( 'div', 'tw-pages' );
 
 		const foot = h( 'footer', 'tw-panel-foot' );
-		foot.innerHTML = '<span><kbd>H</kbd>Hide</span><span><kbd>F1</kbd>Controls</span><span><kbd>P</kbd>Photo mode</span>';
+		foot.innerHTML = '<span><kbd>H</kbd>隐藏</span><span><kbd>F1</kbd>操作说明</span><span><kbd>P</kbd>拍照模式</span>';
 		panel.append( head, this.tabBar, this.pages, foot );
 
 		// collapsed state: a slim rail of tab icons
-		const rail = this.rail = h( 'nav', 'tw-rail tw-glass tw-interactive', { 'aria-label': 'Settings' } );
-		const open = h( 'button', 'tw-rail-btn tw-rail-open', { type: 'button', 'aria-label': 'Open settings', 'data-tip': 'Settings (H)', 'data-tip-side': 'left', html: icon( 'sliders' ) } );
+		const rail = this.rail = h( 'nav', 'tw-rail tw-glass tw-interactive', { 'aria-label': '设置' } );
+		const open = h( 'button', 'tw-rail-btn tw-rail-open', { type: 'button', 'aria-label': '打开设置', 'data-tip': '设置（H）', 'data-tip-side': 'left', html: icon( 'sliders' ) } );
 		open.addEventListener( 'click', () => this.togglePanel( true ) );
 		this.railTabs = h( 'div', 'tw-rail-tabs' );
-		const help = h( 'button', 'tw-rail-btn', { type: 'button', 'aria-label': 'Controls', 'data-tip': 'Controls (F1)', 'data-tip-side': 'left', html: icon( 'help' ) } );
+		const help = h( 'button', 'tw-rail-btn', { type: 'button', 'aria-label': '操作说明', 'data-tip': '操作说明（F1）', 'data-tip-side': 'left', html: icon( 'help' ) } );
 		help.addEventListener( 'click', () => this.toggleHelp() );
 		rail.append( open, h( 'span', 'tw-rail-sep' ), this.railTabs, h( 'span', 'tw-rail-sep' ), help );
 
@@ -2124,56 +2124,58 @@ export class UI {
 		const k = ( ...keys ) => keys.map( ( x ) => `<kbd>${ x }</kbd>` ).join( '' );
 		const row = ( keys, text ) => `<div class="tw-help-row"><span class="tw-keys">${ keys }</span><span class="tw-help-text">${ text }</span></div>`;
 		const wasd = '<span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>';
-		const mouse = `<kbd class="tw-kbd-ico" aria-label="Mouse">${ icon( 'mouse' ) }</kbd>`;
+		const mouse = `<kbd class="tw-kbd-ico" aria-label="鼠标">${ icon( 'mouse' ) }</kbd>`;
 
 		const el = this.helpEl = h( 'div', 'tw-help tw-interactive', { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'tw-help-title', hidden: true } );
 		el.innerHTML = `
 			<div class="tw-help-card tw-glass">
 				<header class="tw-help-head">
 					<div>
-						<h2 id="tw-help-title">Controls</h2>
-						<p>Click the view to capture the mouse. Esc releases it.</p>
+						<h2 id="tw-help-title">操作说明</h2>
+						<p>点击画面捕获鼠标，按 Esc 释放鼠标。</p>
 					</div>
-					<button type="button" class="tw-icon-btn tw-help-close" aria-label="Close" data-tip="Close (F1)">${ icon( 'close' ) }</button>
+					<button type="button" class="tw-icon-btn tw-help-close" aria-label="关闭" data-tip="关闭（F1）">${ icon( 'close' ) }</button>
 				</header>
 				<div class="tw-help-grid">
 					<section>
-						<h3>Move</h3>
-						${ row( wasd, 'Move' ) }
-						${ row( mouse, 'Look around<small>Click to capture</small>' ) }
-						${ row( k( 'Shift' ), 'Sprint, boat boost' ) }
-						${ row( k( 'Space' ), 'Jump, swim up' ) }
-						${ row( k( 'C' ), 'Crouch, dive' ) }
+						<h3>移动</h3>
+						${ row( wasd, '移动' ) }
+						${ row( mouse, '环顾四周<small>点击以捕获鼠标</small>' ) }
+						${ row( k( 'Shift' ), '冲刺、船只加速' ) }
+						${ row( k( 'Space' ), '跳跃、上浮' ) }
+						${ row( k( 'C' ), '蹲下、下潜' ) }
 					</section>
 					<section>
-						<h3>Interact</h3>
-						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade</small>' ) }
-						${ row( k( 'V' ), 'Switch camera<small>Boat view, or overhead / gun-deck artillery view</small>' ) }
-						${ row( k( 'R' ), 'Fishing rod<small>Take out / put away</small>' ) }
-						${ row( k( 'E' ), 'Use broadside guns<small>Stand beside the port or starboard battery</small>' ) }
-						${ row( mouse, 'Aim artillery<small>Horizontal traverse ±50°; vertical range 100 m–2 km</small>' ) }
-						${ row( k( 'RMB' ), 'Artillery focus<small>Focus impact area overhead; zoom beside the guns</small>' ) }
-						${ row( k( 'G' ), 'Projectile camera<small>Toggle per-salvo shell tracking until impact</small>' ) }
-						${ row( k( 'Q' ), 'Artillery pattern<small>Circle / horizontal line while aiming</small>' ) }
-						${ row( k( 'LMB' ), 'Fire artillery, cast, strike, reel<small>Context-sensitive</small>' ) }
-						${ row( k( 'RMB' ), 'Reel in an empty line' ) }
-						${ row( k( 'I' ), 'Cooler and fish log' ) }
-						${ row( k( 'F' ), 'Free camera' ) }
-						${ row( k( 'T' ), 'Pause time' ) }
-						${ row( k( 'L' ), 'Flashlight' ) }
-						${ row( k( 'M' ), 'Mute' ) }
+						<h3>互动</h3>
+						${ row( k( 'E' ), '互动<small>登船、掌舵、上岸、交易</small>' ) }
+						${ row( k( 'V' ), '切换镜头<small>船只视角或俯视／炮舱火炮视角</small>' ) }
+						${ row( k( 'F' ), '舵位观察／开火<small>在海盗船上环顾或瞄准选定炮组</small>' ) }
+						${ row( k( 'E' ), '使用舷炮<small>站在左舷或右舷炮组旁</small>' ) }
+						${ row( mouse, '瞄准火炮<small>水平转向 ±50°；射程 100 米至 2 公里</small>' ) }
+						${ row( k( 'RMB' ), '火炮聚焦<small>俯视落点区域；炮位旁缩放</small>' ) }
+						${ row( k( 'G' ), '炮弹镜头<small>切换每轮齐射的炮弹跟踪，直到命中</small>' ) }
+						${ row( k( 'Q' ), '切换舵位炮组<small>每侧六门舱炮，或船首炮组</small>' ) }
+						${ row( k( 'R' ), '船首炮阵型<small>舱内舷炮始终横向齐射</small>' ) }
+						${ row( k( 'LMB' ), '开炮、抛竿、扬竿、收线<small>依情境而定</small>' ) }
+						${ row( k( 'RMB' ), '收回空鱼线' ) }
+						${ row( k( 'I' ), '冰箱与鱼类图鉴' ) }
+						${ row( k( 'F' ), '自由镜头<small>驾驶武装海盗船时除外</small>' ) }
+						${ row( k( 'T' ), '暂停时间' ) }
+						${ row( k( 'L' ), '手电筒' ) }
+						${ row( k( 'M' ), '群岛地图<small>点击设置航点；使用快速旅行安全移动</small>' ) }
+						${ row( k( 'U' ), '静音' ) }
 					</section>
 					<section>
-						<h3>Interface</h3>
-						${ row( k( 'H' ), 'Settings panel' ) }
-						${ row( k( 'P' ), 'Photo mode<small>Hides all interface</small>' ) }
-						${ row( k( 'F1' ) + k( '?' ), 'This sheet' ) }
-						${ row( k( 'Esc' ), 'Release the mouse' ) }
+						<h3>界面</h3>
+						${ row( k( 'H' ), '设置面板' ) }
+						${ row( k( 'P' ), '拍照模式<small>隐藏全部界面</small>' ) }
+						${ row( k( 'F1' ) + k( '?' ), '本操作说明' ) }
+						${ row( k( 'Esc' ), '释放鼠标' ) }
 					</section>
 				</div>
 				<div class="tw-help-guide">
-					<span><b>How to play:</b> catch fish, sell them to Joe at the fish stand by the pier, and buy upgrades from Marta at the chandlery by the boathouse. Both are on the map (lower right).</span>
-					<button type="button" class="gm-btn is-ghost tw-help-replay">Replay the guide</button>
+					<span><b>玩法：</b>捕鱼后到码头边的鱼摊卖给乔，再去船屋旁的船具店向玛尔塔购买升级。两人都标在右下角地图上。</span>
+					<button type="button" class="gm-btn is-ghost tw-help-replay">重新播放教程</button>
 				</div>
 			</div>`;
 		el.querySelector( '.tw-help-close' ).addEventListener( 'click', () => this.toggleHelp( false ) );
@@ -2193,14 +2195,14 @@ export class UI {
 		el.innerHTML = `
 			<div class="tw-start-inner">
 				${ brandMark( 'tw-start-mark' ) }
-				<div class="tw-start-title">TIDEWATER</div>
-				<button type="button" class="tw-start-cta"><span class="tw-start-pulse" aria-hidden="true"></span>${ icon( 'mouse' ) }<span>Click to explore</span></button>
+				<div class="tw-start-title">潮汐水域</div>
+				<button type="button" class="tw-start-cta"><span class="tw-start-pulse" aria-hidden="true"></span>${ icon( 'mouse' ) }<span>点击开始探索</span></button>
 				<div class="tw-start-keys">
-					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>Move</span>
-					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>Look</span>
-					<span><kbd>E</kbd>Interact</span>
-					<span><kbd>H</kbd>Settings</span>
-					<span><kbd>F1</kbd>All controls</span>
+					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>移动</span>
+					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>观察</span>
+					<span><kbd>E</kbd>互动</span>
+					<span><kbd>H</kbd>设置</span>
+					<span><kbd>F1</kbd>全部操作</span>
 				</div>
 			</div>`;
 		this.root.append( el );

@@ -12,16 +12,49 @@
 //
 // Handled: embedded buffer, interleaved / packed accessors of every component type (normalized
 // or not), node TRS or matrix, LINEAR / STEP samplers (CUBICSPLINE keeps the values, drops the
-// tangents). Not handled: external buffers, Draco / meshopt, sparse accessors, morph targets.
+// tangents), and KHR_draco_mesh_compression. Not handled: external buffers, meshopt, sparse
+// accessors, morph targets.
 //
 // Asset hooks for headless runs (no fetch of relative URLs / no image decoding in Node):
 //   globalThis.__assetFile( url ) -> ArrayBuffer, globalThis.__assetImage( bytes, mimeType ) -> { data, width, height }
 
 import { Matrix4, Quaternion, Vector3 } from '../math/index.js';
-
 const COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
 const ARRAYS = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
 const NORM = { 5120: 127, 5121: 255, 5122: 32767, 5123: 65535 };
+let dracoPromise = null;
+
+function jsonChunk( buffer ) {
+
+	const dv = new DataView( buffer );
+	const length = dv.getUint32( 8, true );
+	for ( let o = 12; o < length; ) {
+
+		const len = dv.getUint32( o, true ), type = dv.getUint32( o + 4, true );
+		if ( type === 0x4E4F534A ) return JSON.parse( new TextDecoder().decode( new Uint8Array( buffer, o + 8, len ) ) );
+		o += 8 + len;
+
+	}
+	throw new Error( 'GLB: no JSON chunk' );
+
+}
+
+async function dracoDecoder() {
+
+	if ( ! dracoPromise ) dracoPromise = Promise.all( [
+		import( 'draco3dgltf/draco_decoder_gltf_nodejs.js' ),
+		import( 'draco3dgltf/draco_decoder_gltf.wasm?url' ),
+	] ).then( ( [ decoderModule, wasmModule ] ) => Promise.all( [ decoderModule.default, fetch( wasmModule.default ) ] ) )
+		.then( ( [ createDracoDecoderModule, response ] ) => {
+
+			if ( ! response.ok ) throw new Error( `Draco decoder ${ response.status }` );
+			return Promise.all( [ createDracoDecoderModule, response.arrayBuffer() ] );
+
+		} )
+		.then( ( [ createDracoDecoderModule, wasmBinary ] ) => createDracoDecoderModule( { wasmBinary } ) );
+	return dracoPromise;
+
+}
 
 export async function loadGLB( url ) {
 
@@ -35,11 +68,13 @@ export async function loadGLB( url ) {
 
 	}
 
-	return parseGLB( buffer );
+	const json = jsonChunk( buffer );
+	const decoder = ( json.extensionsUsed || [] ).includes( 'KHR_draco_mesh_compression' ) ? await dracoDecoder() : null;
+	return parseGLB( buffer, decoder );
 
 }
 
-export function parseGLB( buffer ) {
+export function parseGLB( buffer, draco = null ) {
 
 	const dv = new DataView( buffer );
 	if ( dv.getUint32( 0, true ) !== 0x46546C67 ) throw new Error( 'GLB: bad magic' );
@@ -55,7 +90,7 @@ export function parseGLB( buffer ) {
 	}
 
 	if ( ! json ) throw new Error( 'GLB: no JSON chunk' );
-	const supportedRequired = new Set( [ 'EXT_texture_webp' ] );
+	const supportedRequired = new Set( [ 'EXT_texture_webp', ...( draco ? [ 'KHR_draco_mesh_compression' ] : [] ) ] );
 	const unsupported = ( json.extensionsRequired || [] ).filter( ( name ) => ! supportedRequired.has( name ) );
 	if ( unsupported.length ) throw new Error( 'GLB: unsupported extensions ' + unsupported.join( ', ' ) );
 
@@ -112,6 +147,52 @@ export function parseGLB( buffer ) {
 
 	};
 
+	const decodeDracoPrimitive = ( extension ) => {
+
+		if ( ! draco ) throw new Error( 'GLB: Draco mesh requires the asynchronous loadGLB() path' );
+		const encoded = viewBytes( extension.bufferView );
+		const buffer = new draco.DecoderBuffer();
+		buffer.Init( new Int8Array( encoded.buffer, encoded.byteOffset, encoded.byteLength ), encoded.byteLength );
+		const decoder = new draco.Decoder();
+		const mesh = new draco.Mesh();
+		const status = decoder.DecodeBufferToMesh( buffer, mesh );
+		if ( ! status.ok() || mesh.ptr === 0 ) {
+
+			const message = status.error_msg ? status.error_msg() : 'unknown error';
+			draco.destroy( mesh ); draco.destroy( decoder ); draco.destroy( buffer );
+			throw new Error( 'GLB: Draco decode failed: ' + message );
+
+		}
+
+		const attributes = {};
+		for ( const semantic in extension.attributes ) {
+
+			const attribute = decoder.GetAttributeByUniqueId( mesh, extension.attributes[ semantic ] );
+			const itemSize = attribute.num_components();
+			const values = new draco.DracoFloat32Array();
+			decoder.GetAttributeFloatForAllPoints( mesh, attribute, values );
+			const array = new Float32Array( mesh.num_points() * itemSize );
+			for ( let i = 0; i < array.length; i ++ ) array[ i ] = values.GetValue( i );
+			draco.destroy( values );
+			attributes[ semantic ] = { array, itemSize, normalized: false, componentType: 5126 };
+
+		}
+
+		const indices = new Uint32Array( mesh.num_faces() * 3 );
+		const face = new draco.DracoInt32Array();
+		for ( let i = 0; i < mesh.num_faces(); i ++ ) {
+
+			decoder.GetFaceFromMesh( mesh, i, face );
+			indices[ i * 3 ] = face.GetValue( 0 );
+			indices[ i * 3 + 1 ] = face.GetValue( 1 );
+			indices[ i * 3 + 2 ] = face.GetValue( 2 );
+
+		}
+		draco.destroy( face ); draco.destroy( mesh ); draco.destroy( decoder ); draco.destroy( buffer );
+		return { attributes, indices };
+
+	};
+
 	const m = new Matrix4(), t = new Vector3(), q = new Quaternion(), s = new Vector3();
 	const nodes = ( json.nodes || [] ).map( ( n ) => {
 
@@ -129,10 +210,12 @@ export function parseGLB( buffer ) {
 
 	const meshes = ( json.meshes || [] ).map( ( me ) => me.primitives.map( ( p ) => {
 
-		const attributes = {};
-		for ( const k in p.attributes ) attributes[ k ] = read( p.attributes[ k ] );
+		const compressed = p.extensions?.KHR_draco_mesh_compression;
+		const decoded = compressed ? decodeDracoPrimitive( compressed ) : null;
+		const attributes = decoded?.attributes || {};
+		if ( ! compressed ) for ( const k in p.attributes ) attributes[ k ] = read( p.attributes[ k ] );
 		if ( p.targets && p.targets.length ) console.warn( 'GLB: morph targets are ignored' );
-		return { attributes, indices: p.indices !== undefined ? read( p.indices ).array : null, material: p.material, mode: p.mode ?? 4 };
+		return { attributes, indices: decoded?.indices || ( p.indices !== undefined ? read( p.indices ).array : null ), material: p.material, mode: p.mode ?? 4 };
 
 	} ) );
 

@@ -32,6 +32,7 @@ export class WaterSurface {
 		this.wake = null; // WakeSim (optional)
 		this.terrain = null; // TerrainGPU (optional)
 		this.detail = null; // SeaDetail: gusts, slicks, windrows (optional)
+		this.waterspouts = null; // WaterspoutField: free-surface bowl, spiral waves and spray-ring foam
 		this.shoreSim = null; // ShoreSim (optional)
 		// surf-zone foam look (SurfFoam instance, or anything with a `.module` defining surfFoamShading)
 		this.foamShading = null;
@@ -108,7 +109,7 @@ fn waterSurfaceCascadeAttenuation( c: i32, depth: f32 ) -> f32 {
 
 		const fft = this.fft;
 		const C = fft.cascades;
-		const T = !! this.terrain, SH = !! this.shore, WK = !! this.wake, DT = !! this.detail;
+		const T = !! this.terrain, SH = !! this.shore, WK = !! this.wake, DT = !! this.detail, WS = !! this.waterspouts;
 		const SF = this.surfFoam;
 		const SIM = !! this.shoreSim;
 		const cd = this.cdlod.module.name;
@@ -193,6 +194,12 @@ ${ SH ? /* wgsl */`
 		swashLevel = sw.swashLevel;
 	}` : '' }
 ${ WK ? '	extra += wakeDisplacement( worldXZ );' : '' }
+${ WS ? /* wgsl */`
+	// The same analytical vortex used by gameplay deforms the actual ocean mesh: a pressure bowl,
+	// rotating spiral crests and the raised, breaking spray ring.
+	let ws = waterspoutWaterAt( worldXZ );
+	extra += ws.xyz;
+	foam += ws.w * 0.9;` : '' }
 
 	var total = disp + extra;
 	var y = frame.seaLevel + total.y;
@@ -284,11 +291,30 @@ fn waterSurfaceFragment( lagXZ: vec2f, footprint: f32, depth: f32, vertexFoam: f
 	var aeration = 0.0;
 
 	// world-space gusts / slicks modulate the short wind waves (non-repeating dark and bright patches)
-${ DT ? '	let det = seaDetailSample( lagXZ );\n	let rough = det.rough;' : '	let rough = 1.0;' }
+${ DT ? '	let det = seaDetailSample( lagXZ );\n	var rough = det.rough;' : '	var rough = 1.0;' }
 
 ${ cascadesF }
 	d *= waterSurface.amplitude;
 	var slopes = vec2f( d.x / max( d.z + 1.0, 0.2 ), d.y / max( d.w + 1.0, 0.2 ) );
+${ WS ? /* wgsl */`
+	// Reconstruct the vortex-wave gradient per pixel so the steep spiral seas remain crisp even
+	// where the ocean CDLOD is coarse. Screen derivatives recover d(height)/d(world XZ) from one
+	// field evaluation; two extra finite-difference evaluations cost several ms in the mature ring.
+	let ws0 = waterspoutWaterAt( lagXZ );
+	let wsDx = dpdx( lagXZ );
+	let wsDy = dpdy( lagXZ );
+	let wsDh = vec2f( dpdx( ws0.y ), dpdy( ws0.y ) );
+	let wsDet = wsDx.x * wsDy.y - wsDx.y * wsDy.x;
+	if ( abs( wsDet ) > 1e-7 ) {
+		let wsGrad = vec2f(
+			( wsDh.x * wsDy.y - wsDh.y * wsDx.y ) / wsDet,
+			( wsDx.x * wsDh.y - wsDy.x * wsDh.x ) / wsDet
+		);
+		slopes += clamp( wsGrad, vec2f( - 4.0 ), vec2f( 4.0 ) );
+	}
+	foamSum += ws0.w * 1.15;
+	aeration += ws0.w * 0.82;
+	rough = max( rough, clamp( 0.75 + ws0.w * 0.45, 0.0, 1.45 ) );` : '' }
 
 	// Near-field capillary ripples. Within a few metres of the camera a pixel covers less than
 	// the finest cascade's texel (~3 cm), so the surface looks glassy. Re-sample that cascade at
@@ -386,7 +412,7 @@ ${ SF ? /* wgsl */`
 		return new ShaderModule( {
 			name: 'waterSurface',
 			deps: [ commonModule, fft.module, this.cdlod.module, this.attenuationModule, T && this.terrain.module, SH && this.shore.module,
-				WK && this.wake.module, DT && this.detail.module, SF && SF.module ],
+				WK && this.wake.module, DT && this.detail.module, WS && this.waterspouts.module, SF && SF.module ],
 			uniforms: this.params,
 			uniformName: 'waterSurface',
 			bindings: { waterFoamTex: { texture: this.foamTexture } },

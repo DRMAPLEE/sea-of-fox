@@ -1,14 +1,14 @@
 import {
-	Vector3, Quaternion, Euler, Matrix4, Frustum, Sphere, BufferGeometry, Float32BufferAttribute, Uint16BufferAttribute,
+	Vector3, Quaternion, Euler, Matrix4, Matrix3, Frustum, Sphere, BufferGeometry, BufferAttribute, Float32BufferAttribute, Uint16BufferAttribute,
 	Uint32BufferAttribute, InstancedBufferAttribute, InstancedMesh, DynamicDrawUsage,
 } from '../../engine/index.js';
+import { loadGLB } from '../../engine/loaders/GLTF.js';
 import { Texture } from '../../engine/gpu/Texture.js';
 import { generateMipmaps } from '../../engine/gpu/Mipmaps.js';
 import { commonModule } from '../../engine/render/wgsl/common.js';
 import { lodFadeModule, bandFade } from '../../materials/LODFade.js';
 import { standard } from '../../materials/Materials.js';
 import { srgb } from '../terrain/TerrainShading.js';
-import { parseGLB } from './GLB.js';
 
 // Photoscanned debris (CC0, Poly Haven; see public/models/debris/CREDITS.md): dead wood (logs,
 // branches) and conch shells, instanced with three LODs.
@@ -19,7 +19,8 @@ import { parseGLB } from './GLB.js';
 // material. The asset textures (1K albedo / normal / AO-rough-metal) are packed into 2K atlases
 // (2 x 2 tiles): 3 samplers.
 // Instances are re-bucketed into the LODs (and distance culled) on the CPU when the camera moves.
-// The .glb files are read by the minimal parser in GLB.js (three's GLTFLoader is gone).
+// The .glb files use the shared engine loader so Draco-compressed scans follow the same
+// decoding path as boats, props and characters.
 
 export const SCAN_ASSETS = [ 'dead_quiver_trunk', 'dead_quiver_branch_02', 'dead_quiver_branch_01', 'lambis_shell' ];
 export const SCAN = { TRUNK: 0, BRANCH_A: 1, BRANCH_B: 2, SHELL: 3 };
@@ -29,13 +30,36 @@ const LOD_DIST = [ 22, 70, 260 ]; // m (+ 6 x instance size): LOD0 | LOD1 | LOD2
 const BAND = 0.12; // cross-fade band (Bayer screen-door, see LODFade), share of the switch distance
 const BASE = ( ( import.meta.env && import.meta.env.BASE_URL ) || '/' ) + 'models/debris/';
 
-// bytes of a file (fetch relative to the page). The headless test runner may provide a reader.
-async function loadBytes( url ) {
+function debrisMeshes( gltf ) {
 
-	if ( globalThis.__debrisFile ) return globalThis.__debrisFile( url );
-	const res = await fetch( url );
-	if ( ! res.ok ) throw new Error( 'ScannedDebris: ' + url + ' ' + res.status );
-	return res.arrayBuffer();
+	const meshes = [];
+	const visit = ( ni, parent ) => {
+
+		const node = gltf.nodes[ ni ];
+		const local = new Matrix4().compose( new Vector3( ...node.t ), new Quaternion( ...node.r ), new Vector3( ...node.s ) );
+		const world = new Matrix4().multiplyMatrices( parent, local );
+		if ( node.mesh !== undefined ) {
+
+			const normalMatrix = new Matrix3().getNormalMatrix( world );
+			gltf.meshes[ node.mesh ].forEach( ( primitive, pi ) => {
+
+				if ( primitive.mode !== 4 ) return;
+				const geometry = new BufferGeometry();
+				const attrs = primitive.attributes;
+				if ( attrs.POSITION ) geometry.setAttribute( 'position', new BufferAttribute( attrs.POSITION.array.slice(), attrs.POSITION.itemSize ).applyMatrix4( world ) );
+				if ( attrs.NORMAL ) geometry.setAttribute( 'normal', new BufferAttribute( attrs.NORMAL.array.slice(), attrs.NORMAL.itemSize ).applyNormalMatrix( normalMatrix ) );
+				if ( attrs.TEXCOORD_0 ) geometry.setAttribute( 'uv', new BufferAttribute( attrs.TEXCOORD_0.array.slice(), attrs.TEXCOORD_0.itemSize ) );
+				if ( primitive.indices ) geometry.setIndex( new BufferAttribute( primitive.indices instanceof Uint8Array ? new Uint16Array( primitive.indices ) : primitive.indices, 1 ) );
+				meshes.push( { name: node.name || `mesh${ node.mesh }${ pi ? '_' + pi : '' }`, geometry } );
+
+			} );
+
+		}
+		for ( const child of node.children ) visit( child, world );
+
+	};
+	for ( const root of gltf.roots ) visit( root, new Matrix4() );
+	return meshes;
 
 }
 
@@ -85,7 +109,7 @@ export class ScannedDebris {
 	async _load() {
 
 		const t0 = performance.now();
-		const glbs = await Promise.all( SCAN_ASSETS.map( async ( id ) => parseGLB( await loadBytes( BASE + id + '.glb' ) ) ) );
+		const glbs = await Promise.all( SCAN_ASSETS.map( async ( id ) => ( { meshes: debrisMeshes( await loadGLB( BASE + id + '.glb' ) ) } ) ) );
 		// 2 x 2 atlas per map
 		const maps = [ 'albedo', 'normal', 'arm' ];
 		const atlases = {};

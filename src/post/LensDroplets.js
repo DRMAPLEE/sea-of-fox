@@ -26,11 +26,12 @@ export class LensDroplets {
 		this.aspect = U.aspect;
 		this.duration = 9; // seconds until the lens is dry
 		this._wasUnder = false;
+		this._rainSeedT = 0;
 		this.module = new ShaderModule( { name: 'lens', uniforms: this.uniforms, uniformName: 'lensParams', code: CODE } );
 
 	}
 
-	update( dt, underwater ) {
+	update( dt, underwater, rain = 0 ) {
 
 		if ( underwater ) {
 
@@ -47,7 +48,20 @@ export class LensDroplets {
 			}
 
 			this.age.value += dt;
-			this.wet.value = Math.max( 0, this.wet.value - dt / this.duration );
+			const rainWet = Math.max( 0, Math.min( 1, rain ) );
+			if ( rainWet > 0.01 ) {
+
+				this.wet.value = Math.max( this.wet.value, 0.28 + rainWet * 0.72 );
+				this._rainSeedT -= dt * ( 0.45 + rainWet * 1.3 );
+				if ( this._rainSeedT <= 0 ) {
+
+					this._rainSeedT = 0.8 + Math.random() * 0.9;
+					this.seed.value = Math.random() * 97;
+					this.age.value = Math.random() * 0.45;
+
+				}
+
+			} else this.wet.value = Math.max( 0, this.wet.value - dt / this.duration );
 
 		}
 

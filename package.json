@@ -5,13 +5,17 @@
     "dev": "vite --host 127.0.0.1 --port 5189",
     "build": "vite build",
     "preview": "vite preview",
-		"test": "node test/game-logic.mjs && node test/dynamic-mesh-collider.mjs && node test/editor-map.mjs && node test/engine-smoke.mjs"
+    "test": "node test/game-logic.mjs && node test/dynamic-mesh-collider.mjs && node test/editor-map.mjs && node test/archipelago.mjs && node test/player-deck-controls.mjs && node test/naval-artillery-controls.mjs && node test/engine-smoke.mjs"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.5.1",
     "vite": "^8.3.0",
     "webgpu": "^0.6.1"
   },
   "license": "MIT",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "draco3dgltf": "^1.5.9"
+  }
 }

@@ -60,7 +60,7 @@ fn breakersFresnel( cosI: f32, eta: f32 ) -> f32 {
 
 export class Breakers {
 
-	constructor( renderer, { surface, shore, terrainData, sky, spray = null, clouds = null } ) {
+	constructor( renderer, { surface, shore, terrainData, sky, spray = null, clouds = null, stationSet = null } ) {
 
 		this.renderer = renderer;
 		this.surface = surface;
@@ -82,10 +82,12 @@ export class Breakers {
 		this.cameraPos = F.cameraPos;
 
 		const t0 = performance.now();
-		const st = buildStations( terrainData );
+		const st = stationSet || buildStations( terrainData );
 		this.NS = st.count;
 		this.spacing = st.spacing;
 		this.stationData = st.data;
+		this.dynamicStations = !! stationSet;
+		this.active = true;
 		this.stations = new StorageBuffer( { label: 'brkStations', count: Math.max( 1, this.NS ), type: 'vec4f', data: st.data.length ? st.data : new Float32Array( 4 ) } );
 		// per station and slot (wave parity): 3 x vec4
 		//   (root.xyz, b) (back.xyz, H) (dir.xz, trough y, wave id 1..1024 or 0 = none)
@@ -158,10 +160,22 @@ fn breakersSprayShadow( p: vec3f, seedTag: f32 ) -> f32 {
 
 	update( camera ) {
 
+		if ( this.mesh ) this.mesh.visible = this.active && this.NS > 1;
+		if ( ! this.active ) return;
 		this.cameraPos.value.copy( camera.position );
 		if ( this.surface && this.surface.amplitude ) this.uniforms.fields.amplitude.value = this.surface.amplitude.value;
 		if ( this.kernel ) this.kernel.dispatch( Math.ceil( this.NS / 64 ) );
 		this._budget();
+
+	}
+
+	setStationSet( stationSet ) {
+
+		if ( ! this.dynamicStations ) throw new Error( 'Breakers: stations are not dynamic' );
+		if ( ! stationSet || stationSet.count !== this.NS || stationSet.data.length !== this.NS * 4 ) throw new Error( 'Breakers: station count changed' );
+		this.spacing = stationSet.spacing;
+		this.stationData = stationSet.data;
+		this.stations.write( stationSet.data );
 
 	}
 

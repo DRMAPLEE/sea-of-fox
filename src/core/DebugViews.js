@@ -39,9 +39,8 @@ export const VIEWS = {
 	pirateShip: { p: [ 130, 12, 36 ], yaw: Math.PI * 0.5, pitch: - 0.1, time: 16.2 },
 	pirateShipStern: { p: [ 108, 9, - 16 ], yaw: 2.2, pitch: - 0.08, time: 15.5 },
 	pirateShipDeck: { p: [ 84.5, 8.6, 6.5 ], yaw: Math.PI, pitch: - 0.06, time: 16.2 },
-	// the umibozu in the southern offing: up close, and as seen from the pier head at dusk
-	umibozu: { p: [ - 40, 7, 462 ], yaw: Math.PI, pitch: - 0.02, time: 10.0 },
-	umibozuFromPier: { p: [ 70, 4, 30 ], yaw: 2.92, pitch: 0.01, time: 18.6 },
+	// inside the spray field of the nearest offshore Rankine-vortex plume
+	waterspout: { p: [ 10, 52, - 120 ], yaw: 2.68, pitch: 0.31, time: 16.2 },
 };
 
 export function installDebugViews( app ) {

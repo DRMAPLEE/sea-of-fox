@@ -32,7 +32,8 @@
 // Levels: every sound has a target loudness (LUFS, momentary) for its reference situation in MIX below;
 // the gain is target minus the file's measured loudness (soundBank.js).
 
-import { WORLD } from '../world/WorldLayout.js';
+import { WORLD, wrappedWorldDelta } from '../world/WorldLayout.js';
+import { ARCHIPELAGO, buildIslandShoreStrip, islandDistance } from '../world/Archipelago.js';
 import { BANK } from './soundBank.js';
 
 const clamp = ( v, a, b ) => ( v < a ? a : v > b ? b : v );
@@ -96,6 +97,9 @@ export const MIX = {
 	fishSplash: - 24, // a hooked fish thrashing at the surface, at 6 m
 	fishFlop: - 32, // the landed fish flapping on the line in front of you
 	coins: - 30, // paid at the stand
+	stormWind: - 34, // half the previous linear gain; centred on the waterspout cell
+	rain: - 14.5, // 1.5x previous gain; diffuse rain/thunder under full cloud cover
+	stormMusic: - 24.7, // 1.3x previous gain; danger cue inside the perception radius
 };
 
 // the fishing sounds (loaded when the rod comes out)
@@ -161,6 +165,7 @@ export class SoundScape {
 			u: 0, depth: 0, surf: 0.5, shoreDist: 60, onLand: true, wind: 7, day: 1, nearPier: false, hour: null,
 			shoreX: 0, shoreZ: 1,
 			boat: { active: false, rpm: 0, speed: 0, x: 0, y: 0, z: 0, inside: false },
+			storm: { x: 0, z: 0, wind: 0, rain: 0, bgm: 0 },
 		};
 		const sw = WORLD.swellDir || { x: - 0.12, y: - 1 };
 		const l = Math.hypot( sw.x, sw.y ) || 1;
@@ -572,6 +577,8 @@ export class SoundScape {
 		this.engineLP = lowpass( 1200, 0.6, this.boatSum );
 		this.pierPan = panner( this.above, 3, 1.3 );
 		this.windLP = lowpass( 1400, 0.5, this.above );
+		this.stormPan = panner( this.above, 260, 0.72 );
+		this.stormWindLP = lowpass( 7800, 0.45, this.stormPan );
 
 		// the rod and reel: held in front of you, a little to the right (the reel hangs lower right)
 		this.rodPan = c.createStereoPanner ? c.createStereoPanner() : null;
@@ -594,6 +601,7 @@ export class SoundScape {
 			under_reef: this.under, birds_dawn: this.above, whale_song: this.songPan,
 			boat_engine: this.engineLP, boat_rush: this.boatSum, boat_lap: this.boatSum,
 			reel_wind: this.rod, reel_drag: this.rod, line_strain: this.rod,
+			storm_wind: this.stormWindLP, storm_rain: this.above, storm_bgm: this.near,
 		};
 
 	}
@@ -822,6 +830,35 @@ export class SoundScape {
 	_buildStations() {
 
 		const e = this.env, { terrain } = this._shore, f = [ 0, 0, 0, 0 ];
+		const satellite = this._satelliteAt( e.lx, e.lz );
+		if ( satellite ) {
+
+			const strip = buildIslandShoreStrip( satellite, e.lx, e.lz, { count: ST_N, spacing: ST_GAP } );
+			const out = [];
+			for ( let i = 0; i < strip.count; i ++ ) {
+
+				const k = i * 4, x = strip.data[ k ], z = strip.data[ k + 1 ];
+				// ShoreWaves uses the wave travel direction (sea -> land); the coast helper returns
+				// the signed-distance gradient (land -> sea), hence the minus sign.
+				const dx = - strip.data[ k + 2 ], dz = - strip.data[ k + 3 ];
+				const st = {
+					x, z, dx, dz, Ts: 0, exposure: 0.88,
+					along: - x * dz + z * dx, depth: new Float32Array( TRANSECT ), T: new Float32Array( TRANSECT ),
+					last: { crash: - 1e9, wash: - 1e9, back: - 1e9 },
+				};
+				for ( let r = 0; r < TRANSECT; r ++ ) {
+
+					st.depth[ r ] = Math.max( 0, - terrain.heightAt( x - dx * r, z - dz * r ) );
+					st.T[ r ] = - r / 6;
+
+				}
+				out.push( st );
+
+			}
+			this._stations = out;
+			return;
+
+		}
 		const sea = 0;
 		const h = ( x, z ) => terrain.heightAt( x, z ) - sea;
 		this._field( e.lx, e.lz, f );
@@ -890,6 +927,23 @@ export class SoundScape {
 		}
 
 		this._stations = out;
+
+	}
+
+	_satelliteAt( x, z ) {
+
+		let best = null, bestD = Infinity;
+		for ( let i = 1; i < ARCHIPELAGO.length; i ++ ) {
+
+			const source = ARCHIPELAGO[ i ];
+			const dx = wrappedWorldDelta( source.x, x ), dz = wrappedWorldDelta( source.z, z );
+			if ( Math.abs( dx ) > source.rx + 1800 || Math.abs( dz ) > source.rz + 1800 ) continue;
+			const island = { ...source, x: x - dx, z: z - dz };
+			const d = Math.abs( islandDistance( island, x, z ).d );
+			if ( d < bestD ) { bestD = d; best = island; }
+
+		}
+		return bestD < 1500 ? best : null;
 
 	}
 
@@ -1024,14 +1078,34 @@ export class SoundScape {
 		eb.y = num( bp.y, eb.y );
 		eb.z = num( bp.z, eb.z );
 		eb.inside = !! b.listenerInside;
+		const st = s.storm || EMPTY, es = e.storm;
+		es.x = num( st.x, es.x );
+		es.z = num( st.z, es.z );
+		es.wind = clamp( num( st.wind, 0 ), 0, 1 );
+		es.rain = clamp( num( st.rain, 0 ), 0, 1 );
+		es.bgm = clamp( num( st.bgm, 0 ), 0, 1 );
 		e.onLand = typeof s.coastDistance === 'number' && Number.isFinite( s.coastDistance ) ? s.coastDistance < 0 : true;
 		if ( e.u > 0.01 || eb.active ) e.onLand = false;
 
-		// towards the surf: seaward on land, towards the beach from the water (the bay faces the swell)
-		const sw = this._swell;
-		const inland = e.lx * sw.x + ( e.lz + 42 ) * sw.z > 0;
-		e.shoreX = inland ? - sw.x : sw.x;
-		e.shoreZ = inland ? - sw.z : sw.z;
+		// Point the spatial surf bed at the actual nearest coast. Satellite islands have no baked
+		// ShoreField, so derive the land-to-sea normal from the shared analytic coast distance.
+		const src = this._shoreSrc();
+		if ( src?.terrain ) {
+
+			const T = src.terrain, q = 4;
+			let gx = T.coastDistance( e.lx + q, e.lz ).d - T.coastDistance( e.lx - q, e.lz ).d;
+			let gz = T.coastDistance( e.lx, e.lz + q ).d - T.coastDistance( e.lx, e.lz - q ).d;
+			const gl = Math.hypot( gx, gz ) || 1;
+			gx /= gl; gz /= gl;
+			e.shoreX = e.onLand ? gx : - gx;
+			e.shoreZ = e.onLand ? gz : - gz;
+
+		} else {
+
+			e.shoreX = this._swell.x;
+			e.shoreZ = this._swell.z;
+
+		}
 
 	}
 
@@ -1063,6 +1137,7 @@ export class SoundScape {
 		this._ramp( this.boatOut.gain, e.boat.inside ? 0 : 1, 0.1 );
 		const pier = WORLD.pier;
 		this._pos( this.pierPan, pier.x, 0, clamp( e.lz, Math.max( pier.zStart, - 40 ), pier.zEnd ) );
+		this._pos( this.stormPan, e.storm.x, Math.max( e.ly, 30 ), e.storm.z );
 
 	}
 
@@ -1106,6 +1181,13 @@ export class SoundScape {
 		const gw = eb.active && eb.speed > 3 ? Math.max( g.v, 0.5 ) : g.v; // apparent wind on a running boat is steady
 		this._bed( 'wind', dB( MIX.wind ) * clamp( w / 7, 0, 2.5 ) * gw / dB( BANK.wind.lufs ), now, 0.3 );
 		this._ramp( this.windLP.frequency, 400 + ( 80 + 60 * gw ) * w, 0.4 );
+
+		// Storm layers are independent: full cloud cover always has rain, while wind is spatially
+		// centred on the nearest cell and the music only enters the broader danger/perception radius.
+		const st = e.storm;
+		this._bed( 'storm_wind', dB( MIX.stormWind ) * st.wind / dB( BANK.storm_wind.lufs ), now, 1.2, 0.94 + st.wind * 0.08 );
+		this._bed( 'storm_rain', dB( MIX.rain ) * st.rain / dB( BANK.storm_rain.lufs ), now, 1.5 );
+		this._bed( 'storm_bgm', dB( MIX.stormMusic ) * st.bgm / dB( BANK.storm_bgm.lufs ), now, 2.5 );
 
 		// trees inland rustle in the gusts; crickets inland at night (daylight < 0.3)
 		const veg = e.onLand ? smooth( 6, 30, d ) : 0;

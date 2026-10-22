@@ -146,6 +146,12 @@ export class Wildlife {
 
 	}
 
+	setIslandHabitat( island, coast = null ) {
+
+		this.birds.setIslandHabitat( island, coast );
+
+	}
+
 	update( dt, camera, player = null ) {
 
 		const t0 = performance.now();

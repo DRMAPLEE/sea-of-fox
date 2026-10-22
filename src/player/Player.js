@@ -461,7 +461,7 @@ export class Player {
 				if ( b.tag !== 'ladder' ) continue;
 				if ( Math.hypot( b.center.x - p.x, b.center.z - p.z ) < 1.1 ) {
 
-					this.prompt = { key: 'Space', text: 'Climb ladder' };
+					this.prompt = { key: '空格', text: '爬上梯子' };
 					if ( inp.down( 'Space' ) || inp.down( 'KeyW' ) ) {
 
 						const top = this.colliders.groundHeightAt( b.center.x, b.center.z, 10 );
@@ -535,6 +535,7 @@ export class Player {
 	// sit down at the helm and drive (the old "enter boat")
 	takeHelm() {
 
+		this.artillery?.setDriverFiring( this, false );
 		this.mode = 'boat';
 		this.boat.driven = true;
 		this.boat.moored = false;
@@ -550,6 +551,7 @@ export class Player {
 	// get up from the helm: stand beside the seat, looking forward
 	leaveHelm() {
 
+		this.artillery?.setDriverFiring( this, false );
 		const b = this.boat;
 		b.driven = false;
 		b.throttle = 0;
@@ -683,6 +685,25 @@ export class Player {
 
 	}
 
+	fallFromDeckIntoWater() {
+
+		const b = this.boat;
+		this.deckToWorld();
+		this.velocity.copy( this.deckVel ).applyQuaternion( b.quaternion );
+		if ( b.velocity ) this.velocity.add( b.velocity );
+		const surface = Number.isFinite( this.waterH ) ? this.waterH : b.position.y;
+		// Never carry an already bad deck fall deep below the ocean. Keep a small plunge so the
+		// transition still reads as a real fall, then let swimming buoyancy return the player.
+		this.position.y = Math.max( this.position.y, surface - 0.75 );
+		this.waterH = this.waterMean = surface;
+		this.mode = 'swim';
+		this.floating = true;
+		this.deckVel.set( 0, 0, 0 );
+		this._camY = null;
+		if ( this.audio ) this.audio.splash( 0.75, this.position );
+
+	}
+
 	// highest walkable box top under the point (boat frame), not above maxY; the sole otherwise
 	deckGroundAt( x, z, maxY ) {
 
@@ -723,7 +744,8 @@ export class Player {
 		if ( inp.down( 'KeyD' ) ) _wish.add( _right );
 		if ( inp.down( 'KeyA' ) ) _wish.sub( _right );
 		if ( _wish.lengthSq() > 0 ) _wish.normalize();
-		const speed = ( inp.down( 'ShiftLeft' ) ? 2.6 : 1.6 );
+		const sprint = inp.down( 'ShiftLeft' ) || inp.down( 'ShiftRight' );
+		const speed = sprint ? 5.2 : 2.6;
 		const k = 1 - Math.exp( - 12 * dt );
 		const v = this.deckVel;
 		v.x += ( _wish.x * speed - v.x ) * k;
@@ -806,11 +828,23 @@ export class Player {
 		}
 
 		this.deckToWorld();
+		const waterSurface = Number.isFinite( this.waterH ) ? this.waterH : b.position.y;
+		if ( this.position.y < waterSurface - 0.2 ) {
+
+			this.fallFromDeckIntoWater();
+			return;
+
+		}
 
 		// prompts: take the helm, or step ashore
 		const helm = b.model.helmPoint || _v.set( HOUSE_HELM.x, b.model.lines.deckY, HOUSE_HELM.z );
 		const helmTargets = b.model.helmAccessPoints || [ helm ];
-		const nearHelm = helmTargets.some( ( point ) => Math.hypot( p.x - point.x, p.z - point.z ) < ( b.model.helmReach || HELM_REACH ) && Math.abs( p.y - point.y ) < Math.max( 1.4, stepHeight + 0.2 ) ) && ! this.busy;
+		const helmVerticalReach = b.model.helmVerticalReach ?? Math.max( 1.4, stepHeight + 0.2 );
+		const helmHeightOk = b.model.helmMinY !== undefined
+			? p.y >= b.model.helmMinY && p.y <= b.model.helmMaxY
+			: null;
+		const nearHelm = helmTargets.some( ( point ) => Math.hypot( p.x - point.x, p.z - point.z ) < ( b.model.helmReach || HELM_REACH )
+			&& ( helmHeightOk ?? Math.abs( p.y - point.y ) < helmVerticalReach ) ) && ! this.busy;
 		this._ashoreT -= dt;
 		if ( this._ashoreT <= 0 ) {
 
@@ -821,7 +855,7 @@ export class Player {
 
 		if ( nearHelm ) {
 
-			this.prompt = { key: 'E', text: 'Take the helm' };
+			this.prompt = { key: 'E', text: '掌舵' };
 			if ( inp.hit( 'KeyE' ) ) {
 
 				this.takeHelm();
@@ -836,7 +870,7 @@ export class Player {
 			const atRail = b.model.exitPoints.some( ( e ) => Math.hypot( p.x - e.x, p.z - e.z ) < 1.3 );
 			if ( ep && Math.hypot( p.x - ep.x, p.z - ep.z ) < 1.3 ) {
 
-				this.prompt = { key: 'E', text: 'Step ashore' };
+				this.prompt = { key: 'E', text: '上岸' };
 				if ( inp.hit( 'KeyE' ) ) {
 
 					this.exitBoat( this._ashore );
@@ -846,7 +880,7 @@ export class Player {
 
 			} else if ( atRail ) {
 
-				this.prompt = { key: 'E', text: 'Jump overboard' };
+				this.prompt = { key: 'E', text: '跳入海中' };
 				if ( inp.hit( 'KeyE' ) ) {
 
 					this.exitBoat( null, Math.sign( p.x ) || 1 );
@@ -877,8 +911,15 @@ export class Player {
 		const b = this.boat;
 		const look = inp.consumeLook();
 		const wheel = inp.consumeWheel();
+		const canFire = this.artillery?.canDriverFire( this );
 
-		if ( inp.hit( 'KeyV' ) ) this.camMode = this.camMode === 'first' ? 'third' : 'first';
+		if ( canFire && inp.hit( 'KeyF' ) ) {
+
+			this.artillery.setDriverFiring( this, ! this.artillery.driverFiring );
+			this.camInit = false;
+
+		}
+		if ( ! this.artillery?.driverFiring && inp.hit( 'KeyV' ) ) this.camMode = this.camMode === 'first' ? 'third' : 'first';
 		if ( inp.hit( 'KeyE' ) ) {
 
 			if ( b.model.directBoard ) this.exitBoat( null, Math.sign( b.model.boardPoint.x ) || 1 );
@@ -894,11 +935,19 @@ export class Player {
 		if ( inp.down( 'KeyA' ) ) steer += 1;
 		if ( inp.down( 'KeyD' ) ) steer -= 1;
 		b.setInput( throttle, steer, dt );
-		this.prompt = { key: 'E', text: 'Leave helm   ·   V  camera' };
+		this.prompt = canFire
+			? { key: 'F', text: '射击模式   ·   V 切换视角   ·   E 离开舵位' }
+			: { key: 'E', text: '离开舵位   ·   V  切换镜头' };
 
 		// keep the player attached (for audio / queries)
 		b.toWorld( b.model.helmEye, this.position );
 		this.position.y -= EYE;
+		if ( this.artillery?.driverFiring ) {
+
+			this.artillery.updateDriver( dt, look );
+			return;
+
+		}
 
 		if ( this.camMode === 'first' ) {
 
