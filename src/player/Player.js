@@ -103,6 +103,11 @@ export class Player {
 		this.avatar = null;
 		this.climbing = false;
 		this.weaponDrawn = false;
+		this.weapon = 'none';
+		this.aiming = false;
+		this.combatActive = false;
+		this._combatMouseDown = false;
+		this._gunCooldown = 0;
 		this.avatarYaw = this.yaw + Math.PI;
 		this.avatarDeckYaw = 0;
 		this._characterCameraReady = false;
@@ -112,8 +117,9 @@ export class Player {
 		this._deckMoveInputActive = false;
 		this._deckMoveReferenceYaw = 0;
 		this.airborneTime = 0;
-		this.runningJump = false;
 		this._swimSprayCarry = 0;
+		this._diveFirstPerson = false;
+		this._viewBeforeDive = 'third';
 
 	}
 
@@ -121,6 +127,7 @@ export class Player {
 
 		this.avatar = await HumanoidAvatar.load( url, undefined, this.audio );
 		this.avatar.group.visible = false;
+		this.avatar.setHeldWeapon( this.weapon );
 		return this.avatar;
 
 	}
@@ -134,7 +141,17 @@ export class Player {
 
 	setWeaponDrawn( drawn ) {
 
-		this.weaponDrawn = !! drawn;
+		this.setWeapon( drawn ? 'gun' : 'none' );
+
+	}
+
+	setWeapon( weapon = 'none' ) {
+
+		this.weapon = weapon;
+		this.weaponDrawn = weapon === 'gun';
+		this.combatActive = weapon !== 'none';
+		if ( weapon !== 'gun' ) this.aiming = false;
+		this.avatar?.setHeldWeapon( weapon );
 
 	}
 
@@ -154,6 +171,62 @@ export class Player {
 
 		if ( this.avatar ) this.avatar.audio.step( this.position, options );
 		else if ( this.audio?.humanoidFootstep ) this.audio.humanoidFootstep( this.position, options );
+
+	}
+
+	updateCombatInput( dt ) {
+
+		const inp = this.input;
+		const allowed = this.mode === 'walk' || this.mode === 'deck';
+		if ( ! allowed ) this.setWeapon( 'none' );
+		else {
+
+			if ( inp.hit( 'Digit1' ) ) this.setWeapon( this.weapon === 'sword' ? 'none' : 'sword' );
+			if ( inp.hit( 'Digit2' ) ) this.setWeapon( this.weapon === 'gun' ? 'none' : 'gun' );
+			if ( inp.hit( 'KeyX' ) ) this.setWeapon( 'none' );
+
+		}
+		this.aiming = allowed && this.weapon === 'gun' && inp.rightDown;
+		this._gunCooldown = Math.max( 0, this._gunCooldown - dt );
+		const mouseDown = !! inp.mouseDown && inp.enabled;
+		const pressed = mouseDown && ! this._combatMouseDown && inp.locked;
+		this._combatMouseDown = mouseDown;
+		if ( pressed && this.weapon === 'sword' ) this.attack();
+		else if ( pressed && this.weapon === 'gun' && this.aiming && this._gunCooldown <= 0 ) {
+
+			this.gunshot();
+			this._gunCooldown = 0.32;
+
+		}
+
+	}
+
+	updateDiveView() {
+
+		const diving = this.mode === 'swim' && ( ! this.floating || this.position.y < this.waterH - 0.22 );
+		if ( diving && ! this._diveFirstPerson ) {
+
+			this._viewBeforeDive = this.characterView;
+			this.characterView = 'first';
+			this._diveFirstPerson = true;
+			this._characterCameraReady = false;
+
+		} else if ( ! diving && this._diveFirstPerson ) {
+
+			this.characterView = this._viewBeforeDive;
+			this._diveFirstPerson = false;
+			this._characterCameraReady = false;
+
+		}
+
+	}
+
+	updateCombatPrompt() {
+
+		if ( this.prompt || ! this.combatActive ) return;
+		this.prompt = this.weapon === 'sword'
+			? { key: '鼠标左键', text: '挥剑   ·   1 再按收起   ·   2 切换手枪   ·   X 收起' }
+			: { key: '鼠标右键', text: '按住瞄准   ·   鼠标左键射击   ·   2 再按收起   ·   X 收起' };
 
 	}
 
@@ -270,7 +343,11 @@ export class Player {
 		this.waterMean = this.waterMean === null ? this.waterH : this.waterMean + ( this.waterH - this.waterMean ) * ( 1 - Math.exp( - dt / 4 ) );
 		this.prompt = null;
 		this.climbing = false;
-		if ( ( this.mode === 'walk' || this.mode === 'swim' || this.mode === 'deck' ) && inp.hit( 'KeyV' ) ) {
+		// Also restores a forced dive view if another interaction moved the player straight from
+		// swimming to a deck, helm or cannon between frames.
+		this.updateDiveView();
+		this.updateCombatInput( dt );
+		if ( ( this.mode === 'walk' || this.mode === 'swim' || this.mode === 'deck' ) && ! this._diveFirstPerson && inp.hit( 'KeyV' ) ) {
 
 			this.characterView = this.characterView === 'first' ? 'third' : 'first';
 			this._characterCameraReady = false;
@@ -297,7 +374,12 @@ export class Player {
 
 			this.updateDeck( dt );
 			this.updateAvatar( dt );
-			if ( this.mode === 'deck' ) this.updateCharacterCamera( dt );
+			if ( this.mode === 'deck' ) {
+
+				this.updateCharacterCamera( dt );
+				this.updateCombatPrompt();
+
+			}
 			return;
 
 		}
@@ -331,8 +413,10 @@ export class Player {
 		else this.updateSwim( dt );
 
 		if ( this.mode !== prevMode ) this._characterCameraReady = false;
+		this.updateDiveView();
 		this.updateAvatar( dt );
 		this.updateCharacterCamera( dt );
+		this.updateCombatPrompt();
 
 	}
 
@@ -371,7 +455,13 @@ export class Player {
 		}
 
 		const target = _v3.copy( this.position ).addScaledVector( _yAxis, swimming ? 0.7 : 1.3 );
-		const distance = swimming ? 4.1 : this.mode === 'deck' ? 5.2 : 4.6;
+		if ( this.aiming ) {
+
+			target.x += Math.cos( this.yaw ) * 0.42;
+			target.z -= Math.sin( this.yaw ) * 0.42;
+
+		}
+		const distance = this.aiming ? 2.75 : swimming ? 4.1 : this.mode === 'deck' ? 5.2 : 4.6;
 		const pitch = THREE.MathUtils.clamp( this.pitch, - 1.05, 0.55 );
 		const horizontal = Math.max( 1.15, Math.cos( pitch ) * distance );
 		const lift = 0.75 - Math.sin( pitch ) * distance;
@@ -486,14 +576,13 @@ export class Player {
 		if ( this.mode === 'boat' || this.mode === 'cannon' ) action = HUMANOID_ACTION.HELM_GUN;
 		else if ( this.climbing ) action = HUMANOID_ACTION.CLIMB;
 		else if ( this.mode === 'swim' ) action = speed > 0.18 ? HUMANOID_ACTION.SWIM : HUMANOID_ACTION.SWIM_IDLE;
-		else if ( airborne && this.runningJump ) action = HUMANOID_ACTION.RUN_JUMP;
 		else if ( airborne && this.airborneTime >= 1 ) action = HUMANOID_ACTION.JUMP;
 		else if ( this.weaponDrawn && speed > 0.2 ) action = HUMANOID_ACTION.GUN_AIM_RUN;
 		else if ( this.weaponDrawn ) action = HUMANOID_ACTION.GUN_AIM;
 		else if ( speed > 4 ) action = HUMANOID_ACTION.RUN;
 		else if ( speed > 0.18 ) action = HUMANOID_ACTION.WALK;
 		else if ( turnAction ) action = turnAction;
-		const animationSpeed = action === HUMANOID_ACTION.JUMP ? 1.6 : action === HUMANOID_ACTION.RUN_JUMP ? 1.15 : action === HUMANOID_ACTION.RUN ? 1.12 : 1;
+		const animationSpeed = action === HUMANOID_ACTION.JUMP ? 1.6 : action === HUMANOID_ACTION.RUN ? 1.12 : 1;
 		avatar.setAction( action, { speed: animationSpeed } );
 		avatar.update( dt );
 
@@ -527,7 +616,6 @@ export class Player {
 
 		if ( this.grounded && inp.hit( 'Space' ) && depth < 0.9 ) {
 
-			this.runningJump = Math.hypot( this.velocity.x, this.velocity.z ) > 3.5;
 			this.velocity.y = 4.6;
 			this.grounded = false;
 
@@ -548,7 +636,6 @@ export class Player {
 			p.y = g;
 			if ( this.velocity.y < 0 ) this.velocity.y = 0;
 			this.grounded = true;
-			this.runningJump = false;
 
 		} else {
 
@@ -1026,7 +1113,6 @@ export class Player {
 		v.z += ( _wish.z * speed - v.z ) * k;
 		if ( this.deckGrounded && inp.hit( 'Space' ) ) {
 
-			this.runningJump = Math.hypot( v.x, v.z ) > 3.2;
 			v.y = b.model.deckJumpSpeed || 3.2;
 			this.deckGrounded = false;
 
@@ -1084,7 +1170,6 @@ export class Player {
 			p.y = g;
 			if ( v.y < 0 ) v.y = 0;
 			this.deckGrounded = true;
-			this.runningJump = false;
 
 		} else this.deckGrounded = p.y - g < 0.04;
 

@@ -69,6 +69,12 @@ export class HumanoidAvatar {
 
 	}
 
+	setHeldWeapon( weapon ) {
+
+		this.equipment.setHeld( weapon );
+
+	}
+
 	update( dt ) {
 
 		this.animator.update( dt );

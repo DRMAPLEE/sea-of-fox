@@ -117,7 +117,7 @@ export class Game {
 	get canFish() {
 
 		const app = this.app, p = app.player;
-		return ! app.freeCam && ( p.mode === 'walk' || p.mode === 'deck' ) && ! ( app.ui && app.ui.ui && app.ui.ui._photo );
+		return ! app.freeCam && ! p.combatActive && ( p.mode === 'walk' || p.mode === 'deck' ) && ! ( app.ui && app.ui.ui && app.ui.ui._photo );
 
 	}
 
@@ -260,7 +260,7 @@ export class Game {
 			casting: rod.state === 'windup',
 			power: rod.power,
 			bite: this.bite && this.bite.phase === 'take',
-			aiming: rod.equipped,
+			aiming: rod.equipped || p.aiming,
 		} );
 		if ( this.minimap ) this.minimap.update( dt );
 		if ( this.guide ) this.guide.update( dt );

@@ -2147,6 +2147,9 @@ export class UI {
 					</section>
 					<section>
 						<h3>互动</h3>
+						${ row( k( '1' ), '拔出／收起剑<small>鼠标左键挥剑</small>' ) }
+						${ row( k( '2' ), '拔出／收起手枪<small>按住右键瞄准，左键射击</small>' ) }
+						${ row( k( 'X' ), '收起当前武器' ) }
 						${ row( k( 'E' ), '互动<small>登船、掌舵、上岸、交易</small>' ) }
 						${ row( k( 'V' ), '切换镜头<small>船只视角或俯视／炮舱火炮视角</small>' ) }
 						${ row( k( 'F' ), '舵位观察／开火<small>在海盗船上环顾或瞄准选定炮组</small>' ) }

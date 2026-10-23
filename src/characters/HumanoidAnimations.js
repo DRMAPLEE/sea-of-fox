@@ -8,7 +8,6 @@ export const HUMANOID_ACTION = Object.freeze( {
 	RUN: 'run',
 	CLIMB: 'climb',
 	JUMP: 'jump',
-	RUN_JUMP: 'runJump',
 	ATTACK: 'attack',
 	HELM_GUN: 'helmGun',
 	GUN_AIM: 'gunAim',
@@ -28,7 +27,6 @@ export const GHOST_CAPTAIN_PROFILE = Object.freeze( {
 	run: [ 'Running' ],
 	climb: [ 'Fast_Ladder_Climb' ],
 	jump: [ 'Regular_Jump', 'Leap_of_Faith' ],
-	runJump: [ 'Jump_Over_Obstacle_2', 'Regular_Jump' ],
 	attack: [ 'Triple_Combo_Attack' ],
 	// Meshy left the two standing firearm clips with UUID names. They remain isolated here so
 	// gameplay never depends on opaque asset names. The revised asset explicitly names its

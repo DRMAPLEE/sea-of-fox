@@ -19,6 +19,7 @@ export class HumanoidEquipment {
 		model.group.add( this.socket );
 		this.items = new Map();
 		this.mode = null;
+		this.held = 'none';
 
 	}
 
@@ -49,10 +50,17 @@ export class HumanoidEquipment {
 	setMode( action ) {
 
 		this.mode = action;
-		const gun = action === HUMANOID_ACTION.HELM_GUN || action === HUMANOID_ACTION.GUN_AIM || action === HUMANOID_ACTION.GUN_AIM_RUN;
-		const sword = action === HUMANOID_ACTION.ATTACK;
+		const gun = this.held === 'gun' || action === HUMANOID_ACTION.HELM_GUN || action === HUMANOID_ACTION.GUN_AIM || action === HUMANOID_ACTION.GUN_AIM_RUN;
+		const sword = this.held === 'sword' || ( action === HUMANOID_ACTION.ATTACK && this.held !== 'gun' );
 		if ( this.items.has( 'gun' ) ) this.items.get( 'gun' ).visible = gun;
 		if ( this.items.has( 'sword' ) ) this.items.get( 'sword' ).visible = sword;
+
+	}
+
+	setHeld( weapon = 'none' ) {
+
+		this.held = weapon;
+		this.setMode( this.mode );
 
 	}
 
