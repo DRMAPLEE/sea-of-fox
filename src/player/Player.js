@@ -3,11 +3,13 @@ import { WORLD } from '../world/WorldLayout.js';
 import { HOUSE } from '../world/boat/Wheelhouse.js';
 import { HumanoidAvatar } from '../characters/HumanoidAvatar.js';
 import { HUMANOID_ACTION } from '../characters/HumanoidAnimations.js';
+import { SPRAY } from '../fx/Spray.js';
 
 const HOUSE_HELM = { x: HOUSE.helmX, z: HOUSE.seatZ };
 
 const EYE = 1.62;
 const SWIM_EYE = EYE * 0.1; // eyes above the body's float point while swimming
+const FIRST_PERSON_FORWARD = 0.28;
 const RADIUS = 0.3;
 const HEIGHT = 1.75;
 // water depth (mean level over the feet) where you start swimming / find your feet again
@@ -39,7 +41,7 @@ const HELM_REACH = 0.75; // m from the helm seat to take the wheel
 //   boat : at the helm, driving; V toggles helm (1st person) / chase (3rd person) camera, E stands up
 export class Player {
 
-	constructor( { camera, input, terrain, colliders, query, boat, boats = null, reef = null, audio = null } ) {
+	constructor( { camera, input, terrain, colliders, query, boat, boats = null, reef = null, audio = null, spray = null } ) {
 
 		this.camera = camera;
 		this.input = input;
@@ -50,9 +52,11 @@ export class Player {
 		this.boat = boat || this.boats[ 0 ] || null;
 		this.reef = reef;
 		this.audio = audio;
+		this.spray = spray;
 
 		this.mode = 'walk';
 		this.camMode = 'third';
+		this.characterView = 'third';
 		const start = WORLD.start || WORLD.spawn;
 		this.position = new THREE.Vector3().copy( start.position );
 		// standing on whatever is there (the boardwalk planks), not in it
@@ -100,7 +104,16 @@ export class Player {
 		this.climbing = false;
 		this.weaponDrawn = false;
 		this.avatarYaw = this.yaw + Math.PI;
+		this.avatarDeckYaw = 0;
 		this._characterCameraReady = false;
+		this._lookIdle = 0;
+		this._moveInputActive = false;
+		this._moveReferenceYaw = this.yaw;
+		this._deckMoveInputActive = false;
+		this._deckMoveReferenceYaw = 0;
+		this.airborneTime = 0;
+		this.runningJump = false;
+		this._swimSprayCarry = 0;
 
 	}
 
@@ -257,6 +270,12 @@ export class Player {
 		this.waterMean = this.waterMean === null ? this.waterH : this.waterMean + ( this.waterH - this.waterMean ) * ( 1 - Math.exp( - dt / 4 ) );
 		this.prompt = null;
 		this.climbing = false;
+		if ( ( this.mode === 'walk' || this.mode === 'swim' || this.mode === 'deck' ) && inp.hit( 'KeyV' ) ) {
+
+			this.characterView = this.characterView === 'first' ? 'third' : 'first';
+			this._characterCameraReady = false;
+
+		}
 
 		if ( this.mode === 'boat' ) {
 
@@ -278,6 +297,7 @@ export class Player {
 
 			this.updateDeck( dt );
 			this.updateAvatar( dt );
+			if ( this.mode === 'deck' ) this.updateCharacterCamera( dt );
 			return;
 
 		}
@@ -285,6 +305,12 @@ export class Player {
 		const look = inp.consumeLook();
 		this.yaw -= look.x * 0.0022;
 		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.5, 1.5 );
+		if ( Math.abs( look.x ) + Math.abs( look.y ) > 0.01 ) {
+
+			this._lookIdle = 0;
+			if ( this._moveInputActive ) this._moveReferenceYaw = this.yaw;
+
+		} else this._lookIdle += dt;
 
 		// (not with a line out or a fish in hand: E belongs to the fishing then)
 		if ( this.nearBoat() && ! this.busy ) {
@@ -305,15 +331,46 @@ export class Player {
 		else this.updateSwim( dt );
 
 		if ( this.mode !== prevMode ) this._characterCameraReady = false;
-		this.updateCharacterCamera( dt );
 		this.updateAvatar( dt );
+		this.updateCharacterCamera( dt );
 
 	}
 
 	updateCharacterCamera( dt ) {
 
 		const swimming = this.mode === 'swim';
-		const target = _v3.copy( this.position ).addScaledVector( _yAxis, swimming ? 0.62 : 1.15 );
+		if ( this.characterView === 'first' ) {
+
+			if ( this.avatar?.getHeadPosition( _v ) ) {
+
+				// A body-aware first-person camera sits just in front of the animated head. Keeping
+				// the full mesh visible lets the player see torso, arms, equipment and legs when
+				// looking down, while the forward offset keeps the near plane outside the face.
+				_v2.set( 0, 0, 1 ).applyQuaternion( this.avatar.group.quaternion ).normalize();
+				this.camera.position.copy( _v ).addScaledVector( _yAxis, 0.07 ).addScaledVector( _v2, FIRST_PERSON_FORWARD );
+
+			} else if ( this.mode === 'deck' && this.boat ) {
+
+				this.boat.toWorld( _v.set( this.deckPos.x, this.deckPos.y + EYE, this.deckPos.z ), this.camera.position );
+
+			} else {
+
+				this.camera.position.copy( this.position ).addScaledVector( _yAxis, swimming ? SWIM_EYE : EYE );
+
+			}
+			if ( this.mode === 'deck' && this.boat ) {
+
+				this.deckBase( _q );
+				this.camera.quaternion.copy( _q ).multiply( _qa.setFromEuler( _e.set( this.pitch, this.deckYaw, 0 ) ) );
+
+			} else this.camera.quaternion.setFromEuler( _e.set( this.pitch, this.yaw, 0 ) );
+			this._characterCameraReady = false;
+			this._camY = this.camera.position.y;
+			return;
+
+		}
+
+		const target = _v3.copy( this.position ).addScaledVector( _yAxis, swimming ? 0.7 : 1.3 );
 		const distance = swimming ? 4.1 : this.mode === 'deck' ? 5.2 : 4.6;
 		const pitch = THREE.MathUtils.clamp( this.pitch, - 1.05, 0.55 );
 		const horizontal = Math.max( 1.15, Math.cos( pitch ) * distance );
@@ -342,22 +399,73 @@ export class Player {
 		const avatar = this.avatar;
 		if ( ! avatar ) return;
 		const group = avatar.group;
+		let turnAction = null;
 		group.position.copy( this.position );
+		if ( this.mode === 'swim' ) group.position.y -= 1.05;
 		if ( ( this.mode === 'deck' || this.mode === 'boat' || this.mode === 'cannon' ) && this.boat ) {
 
 			const deckSpeed = Math.hypot( this.deckVel.x, this.deckVel.z );
-			const localYaw = this.mode === 'deck' && deckSpeed > 0.18 && ! this.weaponDrawn
-				? Math.atan2( this.deckVel.x, this.deckVel.z )
-				: this.mode === 'deck' ? this.deckYaw : 0;
+			if ( this.mode === 'deck' && ( this.weaponDrawn || deckSpeed > 0.18 ) ) {
+
+				const targetYaw = this.weaponDrawn ? this.deckYaw : Math.atan2( this.deckVel.x, this.deckVel.z );
+				let turn = targetYaw - this.avatarDeckYaw;
+				turn = Math.atan2( Math.sin( turn ), Math.cos( turn ) );
+				this.avatarDeckYaw += turn * ( 1 - Math.exp( - dt * ( this.weaponDrawn ? 8 : 4.5 ) ) );
+				if ( ! this.weaponDrawn && this.characterView === 'third' && this._lookIdle > 0.55 ) {
+
+					let cameraTurn = this.avatarDeckYaw - this.deckYaw;
+					cameraTurn = Math.atan2( Math.sin( cameraTurn ), Math.cos( cameraTurn ) );
+					this.deckYaw += cameraTurn * ( 1 - Math.exp( - dt * 1.35 ) );
+					this.yaw = this.boat.getYaw() + Math.PI + this.deckYaw;
+
+				}
+
+			} else if ( this.mode === 'deck' && this.deckGrounded && this._lookIdle > 0.25 ) {
+
+				let turn = this.deckYaw - this.avatarDeckYaw;
+				turn = Math.atan2( Math.sin( turn ), Math.cos( turn ) );
+				if ( Math.abs( turn ) > 0.1 ) {
+
+					turnAction = turn > 0 ? HUMANOID_ACTION.TURN_RIGHT : HUMANOID_ACTION.TURN_LEFT;
+					this.avatarDeckYaw += turn * ( 1 - Math.exp( - dt * 3.2 ) );
+
+				}
+
+			}
+			const localYaw = this.mode === 'deck' ? this.avatarDeckYaw : 0;
 			group.quaternion.copy( this.boat.quaternion ).multiply( _qa.setFromAxisAngle( _yAxis, localYaw ) );
 
 		} else {
 
 			const planarSpeed = Math.hypot( this.velocity.x, this.velocity.z );
-			const targetYaw = planarSpeed > 0.18 ? Math.atan2( this.velocity.x, this.velocity.z ) : this.yaw + Math.PI;
-			let turn = targetYaw - this.avatarYaw;
-			turn = Math.atan2( Math.sin( turn ), Math.cos( turn ) );
-			this.avatarYaw += turn * ( 1 - Math.exp( - dt * 14 ) );
+			if ( this.weaponDrawn || planarSpeed > 0.18 ) {
+
+				const targetYaw = this.weaponDrawn ? this.yaw + Math.PI : Math.atan2( this.velocity.x, this.velocity.z );
+				let turn = targetYaw - this.avatarYaw;
+				turn = Math.atan2( Math.sin( turn ), Math.cos( turn ) );
+				this.avatarYaw += turn * ( 1 - Math.exp( - dt * ( this.weaponDrawn ? 8 : 4.5 ) ) );
+				if ( ! this.weaponDrawn && this.characterView === 'third' && this._lookIdle > 0.55 ) {
+
+					const targetCameraYaw = this.avatarYaw - Math.PI;
+					let cameraTurn = targetCameraYaw - this.yaw;
+					cameraTurn = Math.atan2( Math.sin( cameraTurn ), Math.cos( cameraTurn ) );
+					this.yaw += cameraTurn * ( 1 - Math.exp( - dt * 1.35 ) );
+
+				}
+
+			} else if ( this.mode === 'walk' && this.grounded && this._lookIdle > 0.25 ) {
+
+				const targetYaw = this.yaw + Math.PI;
+				let turn = targetYaw - this.avatarYaw;
+				turn = Math.atan2( Math.sin( turn ), Math.cos( turn ) );
+				if ( Math.abs( turn ) > 0.1 ) {
+
+					turnAction = turn > 0 ? HUMANOID_ACTION.TURN_RIGHT : HUMANOID_ACTION.TURN_LEFT;
+					this.avatarYaw += turn * ( 1 - Math.exp( - dt * 3.2 ) );
+
+				}
+
+			}
 			group.rotation.set( 0, this.avatarYaw, 0 );
 
 		}
@@ -365,19 +473,28 @@ export class Player {
 		const dx = this.camera.position.x - this.position.x;
 		const dy = this.camera.position.y - ( this.position.y + 0.9 );
 		const dz = this.camera.position.z - this.position.z;
-		group.visible = dx * dx + dy * dy + dz * dz > 2.25;
+		const bodyAwareFirstPerson = ( this.mode === 'walk' || this.mode === 'swim' || this.mode === 'deck' ) && this.characterView === 'first';
+		const firstPerson = this.mode === 'boat' ? this.camMode === 'first'
+			: this.mode !== 'cannon' && this.characterView === 'first';
+		group.visible = bodyAwareFirstPerson || ( ! firstPerson && dx * dx + dy * dy + dz * dz > 2.25 );
 
 		let action = HUMANOID_ACTION.IDLE;
 		let speed = Math.hypot( this.velocity.x, this.velocity.z );
 		if ( this.mode === 'deck' ) speed = Math.hypot( this.deckVel.x, this.deckVel.z );
+		const airborne = this.mode === 'walk' ? ! this.grounded : this.mode === 'deck' ? ! this.deckGrounded : false;
+		this.airborneTime = airborne ? this.airborneTime + dt : 0;
 		if ( this.mode === 'boat' || this.mode === 'cannon' ) action = HUMANOID_ACTION.HELM_GUN;
 		else if ( this.climbing ) action = HUMANOID_ACTION.CLIMB;
-		else if ( this.mode === 'walk' && ! this.grounded ) action = HUMANOID_ACTION.JUMP;
+		else if ( this.mode === 'swim' ) action = speed > 0.18 ? HUMANOID_ACTION.SWIM : HUMANOID_ACTION.SWIM_IDLE;
+		else if ( airborne && this.runningJump ) action = HUMANOID_ACTION.RUN_JUMP;
+		else if ( airborne && this.airborneTime >= 1 ) action = HUMANOID_ACTION.JUMP;
 		else if ( this.weaponDrawn && speed > 0.2 ) action = HUMANOID_ACTION.GUN_AIM_RUN;
 		else if ( this.weaponDrawn ) action = HUMANOID_ACTION.GUN_AIM;
 		else if ( speed > 4 ) action = HUMANOID_ACTION.RUN;
 		else if ( speed > 0.18 ) action = HUMANOID_ACTION.WALK;
-		avatar.setAction( action, { speed: action === HUMANOID_ACTION.RUN ? 1.12 : 1 } );
+		else if ( turnAction ) action = turnAction;
+		const animationSpeed = action === HUMANOID_ACTION.JUMP ? 1.6 : action === HUMANOID_ACTION.RUN_JUMP ? 1.15 : action === HUMANOID_ACTION.RUN ? 1.12 : 1;
+		avatar.setAction( action, { speed: animationSpeed } );
 		avatar.update( dt );
 
 	}
@@ -385,7 +502,11 @@ export class Player {
 	updateWalk( dt ) {
 
 		const inp = this.input;
-		_fwd.set( - Math.sin( this.yaw ), 0, - Math.cos( this.yaw ) );
+		const moving = inp.down( 'KeyW' ) || inp.down( 'KeyS' ) || inp.down( 'KeyA' ) || inp.down( 'KeyD' );
+		if ( moving && ! this._moveInputActive ) this._moveReferenceYaw = this.yaw;
+		this._moveInputActive = moving;
+		const moveYaw = moving ? this._moveReferenceYaw : this.yaw;
+		_fwd.set( - Math.sin( moveYaw ), 0, - Math.cos( moveYaw ) );
 		_right.set( - _fwd.z, 0, _fwd.x );
 		const wish = new THREE.Vector3();
 		if ( inp.down( 'KeyW' ) ) wish.add( _fwd );
@@ -406,6 +527,7 @@ export class Player {
 
 		if ( this.grounded && inp.hit( 'Space' ) && depth < 0.9 ) {
 
+			this.runningJump = Math.hypot( this.velocity.x, this.velocity.z ) > 3.5;
 			this.velocity.y = 4.6;
 			this.grounded = false;
 
@@ -426,6 +548,7 @@ export class Player {
 			p.y = g;
 			if ( this.velocity.y < 0 ) this.velocity.y = 0;
 			this.grounded = true;
+			this.runningJump = false;
 
 		} else {
 
@@ -484,8 +607,12 @@ export class Player {
 		const p = this.position;
 		const surfaceY = this.waterH;
 		// look-relative movement (diving follows the view)
-		_fwd.set( 0, 0, - 1 ).applyEuler( _e.set( this.pitch, this.yaw, 0 ) );
-		_right.set( - Math.cos( this.yaw ), 0, Math.sin( this.yaw ) ).negate();
+		const moving = inp.down( 'KeyW' ) || inp.down( 'KeyS' ) || inp.down( 'KeyA' ) || inp.down( 'KeyD' );
+		if ( moving && ! this._moveInputActive ) this._moveReferenceYaw = this.yaw;
+		this._moveInputActive = moving;
+		const moveYaw = moving ? this._moveReferenceYaw : this.yaw;
+		_fwd.set( 0, 0, - 1 ).applyEuler( _e.set( this.pitch, moveYaw, 0 ) );
+		_right.set( - Math.cos( moveYaw ), 0, Math.sin( moveYaw ) ).negate();
 		const wish = new THREE.Vector3();
 		if ( inp.down( 'KeyW' ) ) wish.add( _fwd );
 		if ( inp.down( 'KeyS' ) ) wish.sub( _fwd );
@@ -525,6 +652,28 @@ export class Player {
 		this.resolveBoatMeshes( old, 1.0 );
 		const g = this.groundAt( p.x, p.z, p.y + 0.3 );
 		if ( p.y < g + 0.25 ) p.y = g + 0.25;
+
+		// Surface strokes throw real water droplets and compact white spray behind the body.
+		// Fully submerged swimming keeps the particles off, avoiding impossible underwater foam.
+		const surfaceSpeed = Math.hypot( this.velocity.x, this.velocity.z );
+		if ( this.spray && atSurface && surfaceSpeed > 0.2 ) {
+
+			this._swimSprayCarry += dt * ( sprint ? 75 : 48 ) * THREE.MathUtils.clamp( surfaceSpeed / 1.5, 0.25, 1.5 );
+			const count = Math.min( 18, Math.floor( this._swimSprayCarry ) );
+			if ( count > 0 ) {
+
+				this._swimSprayCarry -= count;
+				_v2.set( this.velocity.x, 0, this.velocity.z ).normalize();
+				_v3.copy( p ).addScaledVector( _v2, - 0.55 );
+				_v3.y = surfaceY + 0.04;
+				_v4.copy( _v2 ).multiplyScalar( - 0.35 );
+				_v4.y = sprint ? 1.5 : 1.05;
+				this.spray.emit( _v3, _v4, count, 0.012, SPRAY.DROPLET, { spread: 0.85, jitter: 0.28, life: 0.9, sizeJitter: 0.65 } );
+				this.spray.emit( _v3, _v4, Math.max( 1, Math.floor( count * 0.28 ) ), 0.065, SPRAY.SPRAY, { spread: 0.55, jitter: 0.22, life: 0.55, sizeJitter: 0.55 } );
+
+			}
+
+		} else this._swimSprayCarry = 0;
 
 		// strokes / bubbles
 		this.stepDist += this.velocity.length() * dt;
@@ -633,6 +782,7 @@ export class Player {
 		this.deckVel.set( 0, 0, 0 );
 		// keep looking where you looked (relative to the boat)
 		this.deckYaw = this.yaw - ( b.getYaw() + Math.PI );
+		this.avatarDeckYaw = this.deckYaw;
 		this.deckGrounded = true;
 		this._ashore = null;
 		this._ashoreT = 0;
@@ -847,9 +997,19 @@ export class Player {
 		const look = inp.consumeLook();
 		this.deckYaw -= look.x * 0.0022;
 		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.5, 1.5 );
+		if ( Math.abs( look.x ) + Math.abs( look.y ) > 0.01 ) {
+
+			this._lookIdle = 0;
+			if ( this._deckMoveInputActive ) this._deckMoveReferenceYaw = this.deckYaw;
+
+		} else this._lookIdle += dt;
 
 		// movement in the boat frame (camera base looks along +Z at deckYaw 0)
-		const sy = Math.sin( this.deckYaw ), cy = Math.cos( this.deckYaw );
+		const moving = inp.down( 'KeyW' ) || inp.down( 'KeyS' ) || inp.down( 'KeyA' ) || inp.down( 'KeyD' );
+		if ( moving && ! this._deckMoveInputActive ) this._deckMoveReferenceYaw = this.deckYaw;
+		this._deckMoveInputActive = moving;
+		const moveYaw = moving ? this._deckMoveReferenceYaw : this.deckYaw;
+		const sy = Math.sin( moveYaw ), cy = Math.cos( moveYaw );
 		_fwd.set( sy, 0, cy );
 		_right.set( - cy, 0, sy );
 		_wish.set( 0, 0, 0 );
@@ -866,6 +1026,7 @@ export class Player {
 		v.z += ( _wish.z * speed - v.z ) * k;
 		if ( this.deckGrounded && inp.hit( 'Space' ) ) {
 
+			this.runningJump = Math.hypot( v.x, v.z ) > 3.2;
 			v.y = b.model.deckJumpSpeed || 3.2;
 			this.deckGrounded = false;
 
@@ -923,6 +1084,7 @@ export class Player {
 			p.y = g;
 			if ( v.y < 0 ) v.y = 0;
 			this.deckGrounded = true;
+			this.runningJump = false;
 
 		} else this.deckGrounded = p.y - g < 0.04;
 
@@ -1009,9 +1171,6 @@ export class Player {
 		// Run this after the standard deck interactions so the closer cannon station owns the prompt.
 		// Entering changes mode immediately, so do not overwrite its third-person camera below.
 		if ( this.artillery?.offerFromDeck( this ) ) return;
-
-		// Third-person character camera follows the world-space deck position while the hull moves.
-		this.updateCharacterCamera( dt );
 
 	}
 

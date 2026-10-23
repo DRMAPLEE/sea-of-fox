@@ -495,11 +495,11 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// interactive wake around the boat (Kelvin pattern, bow/stern waves, prop wash foam)
 		this.wake = new WakeSim( renderer, { terrainGPU: this.terrainGPU, boat: this.boatCtl, colliders: this.colliders } );
 		this.surface.wake = this.wake;
-		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, boats: this.boatCtls, reef: this.reef } );
+		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, boats: this.boatCtls, reef: this.reef, spray: this.spray } );
 		try {
 
-			await progress( 0.33, '正在登上海灵猎犬船长…' );
-			const avatar = await this.player.loadAvatar( base + 'models/characters/spectral-sea-hound.glb' );
+			await progress( 0.33, '正在登上幽灵船长…' );
+			const avatar = await this.player.loadAvatar( base + 'models/characters/ghost-captain.glb' );
 			scene.add( avatar.group );
 			await avatar.loadEquipment( {
 				gunUrl: base + 'models/weapons/wild-west-gun.glb',

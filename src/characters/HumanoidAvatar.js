@@ -1,15 +1,15 @@
 import { loadGLB } from '../engine/loaders/GLTF.js';
 import { SkinnedModel } from '../engine/render/Skinning.js';
-import { HUMANOID_ACTION, HumanoidAnimator, SPECTRAL_SEA_HOUND_PROFILE } from './HumanoidAnimations.js';
+import { HUMANOID_ACTION, HumanoidAnimator, GHOST_CAPTAIN_PROFILE } from './HumanoidAnimations.js';
 import { HumanoidActionAudio } from './HumanoidAudio.js';
 import { HumanoidEquipment } from './HumanoidEquipment.js';
 
 export class HumanoidAvatar {
 
-	static async load( url, profile = SPECTRAL_SEA_HOUND_PROFILE, sound = null ) {
+	static async load( url, profile = GHOST_CAPTAIN_PROFILE, sound = null ) {
 
 		const model = await SkinnedModel.create( await loadGLB( url ) );
-		for ( const material of model.materials ) material.underwaterLighting = 'lite';
+		for ( const material of model.materials ) material.underwaterLighting = 'full';
 		const avatar = new HumanoidAvatar( model, profile, sound );
 		avatar.model.update( 0 );
 		return avatar;
@@ -21,10 +21,24 @@ export class HumanoidAvatar {
 		this.model = model;
 		this.group = model.group;
 		this.group.name = 'PlayerAvatar';
+		this.group.scale.setScalar( 1.2 );
+		this.headNode = [ 'mixamorig:Head', 'Head', 'head' ]
+			.map( ( name ) => model.gltf.nodes.findIndex( ( node ) => node.name === name ) )
+			.find( ( index ) => index >= 0 ) ?? - 1;
 		this.animator = new HumanoidAnimator( model, profile );
 		this.audio = new HumanoidActionAudio( sound );
 		this.equipment = new HumanoidEquipment( model );
 		this.action = HUMANOID_ACTION.IDLE;
+
+	}
+
+	getHeadPosition( out ) {
+
+		if ( this.headNode < 0 ) return false;
+		const offset = this.headNode * 16;
+		out.set( this.model.world[ offset + 12 ], this.model.world[ offset + 13 ], this.model.world[ offset + 14 ] );
+		this.group.localToWorld( out );
+		return true;
 
 	}
 

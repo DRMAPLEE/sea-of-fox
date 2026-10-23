@@ -265,9 +265,10 @@ export class AppUI {
 
 		}
 
+		const person = p.characterView === 'first' ? '第一' : '第三';
 		const mode = p.mode === 'boat' ? `驾船 · ${ p.camMode === 'first' ? '第一' : '第三' }人称`
-			: p.mode === 'deck' ? '甲板行走'
-			: p.mode === 'swim' ? ( app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? '潜水' : '游泳' ) : '步行';
+			: p.mode === 'deck' ? `甲板行走 · ${ person }人称`
+			: p.mode === 'swim' ? `${ app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? '潜水' : '游泳' } · ${ person }人称` : `步行 · ${ person }人称`;
 		ui.setMode( mode );
 		if ( p.prompt ) ui.setPrompt( p.prompt.key, p.prompt.text );
 		else ui.setPrompt( null );
