@@ -57,6 +57,9 @@ slice table is in `src/audio/soundBank.js`.
 | `storm-wind.mp3` | spatial howling wind around a waterspout cell | user-supplied `liecio-strong-howling-wind-132281.mp3` | Liecio | user-supplied; verify licence before redistribution |
 | `storm-rain.mp3` | looping thunder and rain bed under full cloud cover | user-supplied `freesound_community-034802_thunders-and-rain-73155.mp3` | Freesound Community | user-supplied; verify licence before redistribution |
 | `storm-bgm.mp3` | danger music inside the perceptible storm radius | user-supplied `luminewave-i-know-this-is-the-end-621152.mp3` | LumineWave | user-supplied; verify licence before redistribution |
+| `humanoid-sword.mp3` | humanoid sword attack | user-supplied `musicholder-sword-sound-260274.mp3` | MusicHolder | user-supplied; verify licence before redistribution |
+| `humanoid-steps.mp3` | boot steps for walking, running and climbing | user-supplied `soundreality-footsteps-walking-boots-leaves-autumn-5-422733.mp3` | SoundReality | user-supplied; verify licence before redistribution |
+| `humanoid-gunshot.mp3` | handheld firearm shot | user-supplied `u_62htdrvg4y-gun-shot-359196.mp3` | u_62htdrvg4y | user-supplied; verify licence before redistribution |
 
 Note: `under_reef.ogg` uses the first ~200 s of 630436's preview (a narrow 1.7 kHz tone notched out).
 

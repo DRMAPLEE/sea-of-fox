@@ -1,6 +1,8 @@
 import * as THREE from '../engine/index.js';
 import { WORLD } from '../world/WorldLayout.js';
 import { HOUSE } from '../world/boat/Wheelhouse.js';
+import { HumanoidAvatar } from '../characters/HumanoidAvatar.js';
+import { HUMANOID_ACTION } from '../characters/HumanoidAnimations.js';
 
 const HOUSE_HELM = { x: HOUSE.helmX, z: HOUSE.seatZ };
 
@@ -29,7 +31,7 @@ const DECK_RADIUS = 0.24;
 const DECK_STEP = 0.36; // highest ledge you step up onto
 const HELM_REACH = 0.75; // m from the helm seat to take the wheel
 
-// First-person walker / swimmer / boat captain.
+// Third-person walker / swimmer, with dedicated helm and artillery cameras.
 //   walk : capsule on terrain + walkable colliders, wading slows you down
 //   swim : floats with the head at the surface; look down + W (or C) to dive, Space to rise
 //   deck : aboard, walking in the boat's frame (it moves and rocks under you); E at the helm
@@ -94,6 +96,51 @@ export class Player {
 		this.busy = false;
 		// Assigned by NavalArtillery when the pirate ship's broadside stations are ready.
 		this.artillery = null;
+		this.avatar = null;
+		this.climbing = false;
+		this.weaponDrawn = false;
+		this.avatarYaw = this.yaw + Math.PI;
+		this._characterCameraReady = false;
+
+	}
+
+	async loadAvatar( url ) {
+
+		this.avatar = await HumanoidAvatar.load( url, undefined, this.audio );
+		this.avatar.group.visible = false;
+		return this.avatar;
+
+	}
+
+	setActionAudio( audio ) {
+
+		this.audio = audio;
+		this.avatar?.audio.setSound( audio );
+
+	}
+
+	setWeaponDrawn( drawn ) {
+
+		this.weaponDrawn = !! drawn;
+
+	}
+
+	attack() {
+
+		return this.avatar?.attack() || false;
+
+	}
+
+	gunshot() {
+
+		this.avatar?.gunshot();
+
+	}
+
+	playHumanoidStep( options ) {
+
+		if ( this.avatar ) this.avatar.audio.step( this.position, options );
+		else if ( this.audio?.humanoidFootstep ) this.audio.humanoidFootstep( this.position, options );
 
 	}
 
@@ -209,10 +256,12 @@ export class Player {
 		this.waterH = this.waterHeight();
 		this.waterMean = this.waterMean === null ? this.waterH : this.waterMean + ( this.waterH - this.waterMean ) * ( 1 - Math.exp( - dt / 4 ) );
 		this.prompt = null;
+		this.climbing = false;
 
 		if ( this.mode === 'boat' ) {
 
 			this.updateBoat( dt );
+			this.updateAvatar( dt );
 			return;
 
 		}
@@ -220,6 +269,7 @@ export class Player {
 		if ( this.mode === 'cannon' ) {
 
 			this.artillery?.update( dt );
+			this.updateAvatar( dt );
 			return;
 
 		}
@@ -227,6 +277,7 @@ export class Player {
 		if ( this.mode === 'deck' ) {
 
 			this.updateDeck( dt );
+			this.updateAvatar( dt );
 			return;
 
 		}
@@ -253,30 +304,81 @@ export class Player {
 		if ( this.mode === 'walk' ) this.updateWalk( dt );
 		else this.updateSwim( dt );
 
-		// camera. Wading out of your depth, finding your feet again or climbing out on a ladder
-		// changes the eye height: ease the view there (critically damped) instead of jumping
-		const eye = this.position.clone();
-		if ( this.mode === 'walk' ) eye.y += EYE + Math.sin( this.bob ) * 0.035 * ( 1 - 0.6 * this.wade );
-		else eye.y += SWIM_EYE;
-		if ( this._camY === null || this.camera.position.y !== this._camY ) {
+		if ( this.mode !== prevMode ) this._characterCameraReady = false;
+		this.updateCharacterCamera( dt );
+		this.updateAvatar( dt );
 
-			// something else drove the camera since our last frame (free camera, boat): start fresh
-			this.camOff = 0;
-			this.camOffV = 0;
+	}
 
-		} else if ( this.mode !== prevMode ) {
+	updateCharacterCamera( dt ) {
 
-			this.camOff = this._camY - eye.y;
+		const swimming = this.mode === 'swim';
+		const target = _v3.copy( this.position ).addScaledVector( _yAxis, swimming ? 0.62 : 1.15 );
+		const distance = swimming ? 4.1 : this.mode === 'deck' ? 5.2 : 4.6;
+		const pitch = THREE.MathUtils.clamp( this.pitch, - 1.05, 0.55 );
+		const horizontal = Math.max( 1.15, Math.cos( pitch ) * distance );
+		const lift = 0.75 - Math.sin( pitch ) * distance;
+		const want = _v4.set(
+			target.x + Math.sin( this.yaw ) * horizontal,
+			target.y + lift,
+			target.z + Math.cos( this.yaw ) * horizontal
+		);
+		want.y = Math.max( want.y, this.waterH + 0.35 );
+		if ( this.mode !== 'deck' ) want.y = Math.max( want.y, this.terrain.heightAt( want.x, want.z ) + 0.4 );
+		if ( ! this._characterCameraReady ) {
+
+			this.camPos.copy( want );
+			this._characterCameraReady = true;
+
+		} else this.camPos.lerp( want, 1 - Math.exp( - dt * 9 ) );
+		this.camera.position.copy( this.camPos );
+		this.camera.lookAt( target );
+		this._camY = this.camera.position.y;
+
+	}
+
+	updateAvatar( dt ) {
+
+		const avatar = this.avatar;
+		if ( ! avatar ) return;
+		const group = avatar.group;
+		group.position.copy( this.position );
+		if ( ( this.mode === 'deck' || this.mode === 'boat' || this.mode === 'cannon' ) && this.boat ) {
+
+			const deckSpeed = Math.hypot( this.deckVel.x, this.deckVel.z );
+			const localYaw = this.mode === 'deck' && deckSpeed > 0.18 && ! this.weaponDrawn
+				? Math.atan2( this.deckVel.x, this.deckVel.z )
+				: this.mode === 'deck' ? this.deckYaw : 0;
+			group.quaternion.copy( this.boat.quaternion ).multiply( _qa.setFromAxisAngle( _yAxis, localYaw ) );
+
+		} else {
+
+			const planarSpeed = Math.hypot( this.velocity.x, this.velocity.z );
+			const targetYaw = planarSpeed > 0.18 ? Math.atan2( this.velocity.x, this.velocity.z ) : this.yaw + Math.PI;
+			let turn = targetYaw - this.avatarYaw;
+			turn = Math.atan2( Math.sin( turn ), Math.cos( turn ) );
+			this.avatarYaw += turn * ( 1 - Math.exp( - dt * 14 ) );
+			group.rotation.set( 0, this.avatarYaw, 0 );
 
 		}
 
-		const w = 6, e = Math.exp( - w * dt ), j = ( this.camOffV + w * this.camOff ) * dt;
-		this.camOff = ( this.camOff + j ) * e;
-		this.camOffV = ( this.camOffV - w * j ) * e;
-		eye.y += this.camOff;
-		this.camera.position.copy( eye );
-		this._camY = this.camera.position.y;
-		this.camera.quaternion.setFromEuler( _e.set( this.pitch, this.yaw, 0 ) );
+		const dx = this.camera.position.x - this.position.x;
+		const dy = this.camera.position.y - ( this.position.y + 0.9 );
+		const dz = this.camera.position.z - this.position.z;
+		group.visible = dx * dx + dy * dy + dz * dz > 2.25;
+
+		let action = HUMANOID_ACTION.IDLE;
+		let speed = Math.hypot( this.velocity.x, this.velocity.z );
+		if ( this.mode === 'deck' ) speed = Math.hypot( this.deckVel.x, this.deckVel.z );
+		if ( this.mode === 'boat' || this.mode === 'cannon' ) action = HUMANOID_ACTION.HELM_GUN;
+		else if ( this.climbing ) action = HUMANOID_ACTION.CLIMB;
+		else if ( this.mode === 'walk' && ! this.grounded ) action = HUMANOID_ACTION.JUMP;
+		else if ( this.weaponDrawn && speed > 0.2 ) action = HUMANOID_ACTION.GUN_AIM_RUN;
+		else if ( this.weaponDrawn ) action = HUMANOID_ACTION.GUN_AIM;
+		else if ( speed > 4 ) action = HUMANOID_ACTION.RUN;
+		else if ( speed > 0.18 ) action = HUMANOID_ACTION.WALK;
+		avatar.setAction( action, { speed: action === HUMANOID_ACTION.RUN ? 1.12 : 1 } );
+		avatar.update( dt );
 
 	}
 
@@ -342,7 +444,7 @@ export class Player {
 
 				this.stepDist = 0;
 				this.surface = this.surfaceType( depth );
-				if ( this.audio ) this.audio.footstep( this.surface );
+				this.playHumanoidStep( { running: sprint } );
 
 			}
 
@@ -467,7 +569,15 @@ export class Player {
 						const top = this.colliders.groundHeightAt( b.center.x, b.center.z, 10 );
 						if ( top > p.y ) {
 
+							this.climbing = true;
 							p.y += dt * 1.6;
+							this.stepDist += dt * 1.6;
+							if ( this.stepDist > 0.65 ) {
+
+								this.stepDist = 0;
+								this.playHumanoidStep( { climbing: true } );
+
+							}
 							if ( p.y > top - 1.0 ) {
 
 								// step onto the deck
@@ -528,6 +638,7 @@ export class Player {
 		this._ashoreT = 0;
 		this.velocity.set( 0, 0, 0 );
 		this._camY = null;
+		this._characterCameraReady = false;
 		this.deckToWorld();
 
 	}
@@ -569,6 +680,7 @@ export class Player {
 		this.pitch = this.helmPitch;
 		this.deckGrounded = true;
 		this._camY = null;
+		this._characterCameraReady = false;
 		if ( this.audio ) this.audio.engineStop();
 		this.deckToWorld();
 
@@ -628,6 +740,7 @@ export class Player {
 		this.velocity.set( 0, 0, 0 );
 		this.yaw = b.getYaw() + Math.PI;
 		this._camY = null;
+		this._characterCameraReady = false;
 		if ( this.audio && wasDriving ) this.audio.engineStop();
 
 	}
@@ -700,6 +813,7 @@ export class Player {
 		this.floating = true;
 		this.deckVel.set( 0, 0, 0 );
 		this._camY = null;
+		this._characterCameraReady = false;
 		if ( this.audio ) this.audio.splash( 0.75, this.position );
 
 	}
@@ -821,7 +935,7 @@ export class Player {
 			if ( this.stepDist > 0.6 ) {
 
 				this.stepDist = 0;
-				if ( this.audio ) this.audio.footstep( 'wood' );
+				this.playHumanoidStep( { running: sprint } );
 
 			}
 
@@ -896,12 +1010,8 @@ export class Player {
 		// Entering changes mode immediately, so do not overwrite its third-person camera below.
 		if ( this.artillery?.offerFromDeck( this ) ) return;
 
-		// camera: eye above the feet, following the boat's motion
-		const eyeL = _v.set( p.x, p.y + EYE + Math.sin( this.bob ) * 0.02, p.z );
-		b.toWorld( eyeL, this.camera.position );
-		this._camY = this.camera.position.y;
-		this.deckBase( _q );
-		this.camera.quaternion.copy( _q ).multiply( _qa.setFromEuler( _e.set( this.pitch, this.deckYaw, 0 ) ) );
+		// Third-person character camera follows the world-space deck position while the hull moves.
+		this.updateCharacterCamera( dt );
 
 	}
 

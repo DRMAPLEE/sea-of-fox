@@ -496,6 +496,21 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.wake = new WakeSim( renderer, { terrainGPU: this.terrainGPU, boat: this.boatCtl, colliders: this.colliders } );
 		this.surface.wake = this.wake;
 		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, boats: this.boatCtls, reef: this.reef } );
+		try {
+
+			await progress( 0.33, '正在登上海灵猎犬船长…' );
+			const avatar = await this.player.loadAvatar( base + 'models/characters/spectral-sea-hound.glb' );
+			scene.add( avatar.group );
+			await avatar.loadEquipment( {
+				gunUrl: base + 'models/weapons/wild-west-gun.glb',
+				swordUrl: base + 'models/weapons/sword.glb',
+			} );
+
+		} catch ( error ) {
+
+			console.warn( 'player avatar failed to load', error );
+
+		}
 		this.artillery = new NavalArtillery( {
 			app: this,
 			boat: this.tallShipCtl,
@@ -542,7 +557,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// ---------------------------------------------------------------- audio
 		// recorded field recordings (public/audio, credits in public/audio/CREDITS.md); ?noAudio turns it off
 		this.audio = qs.has( 'noAudio' ) || qs.has( 'editor' ) ? null : new SoundScape();
-		this.player.audio = this.audio;
+		this.player.setActionAudio( this.audio );
 		// the fishing game (rod, bites, catch, cooler, fish stand)
 		this.game = new Game( this );
 		// the lanterns at Joe's fish stand and Marta's chandlery (lit from dusk like the village lamps);
@@ -753,6 +768,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		p.waterH = water;
 		p.waterMean = water;
+		p._characterCameraReady = false;
 
 	}
 
@@ -813,6 +829,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		p.floating = ground < 0;
 		p.waterH = p.waterMean = 0;
 		p._camY = null;
+		p._characterCameraReady = false;
 		return { ...target, mode: p.mode };
 
 	}

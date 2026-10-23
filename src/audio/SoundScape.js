@@ -100,6 +100,9 @@ export const MIX = {
 	stormWind: - 34, // half the previous linear gain; centred on the waterspout cell
 	rain: - 14.5, // 1.5x previous gain; diffuse rain/thunder under full cloud cover
 	stormMusic: - 24.7, // 1.3x previous gain; danger cue inside the perception radius
+	humanoidStep: - 34,
+	humanoidSword: - 20,
+	humanoidGunshot: - 12,
 };
 
 // the fishing sounds (loaded when the rod comes out)
@@ -118,7 +121,7 @@ const STEP = {
 };
 
 // max simultaneous one-shot voices per category (oldest is faded out beyond this)
-const LIMITS = { step: 3, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, artillery: 12 };
+const LIMITS = { step: 3, humanoid: 6, swim: 2, splash: 3, trans: 2, hull: 3, gull: 2, crash: 7, wash: 5, back: 5, bird: 4, tern: 2, whale: 4, rod: 4, fish: 3, coin: 1, artillery: 12 };
 
 // loaded at resume(); everything else on first use
 const CORE = [ 'surf_crash', 'surf_wash', 'surf_backwash', 'surf_far', 'wind', 'palms', 'step_sand', 'step_wetsand', 'step_wood', 'step_water', 'step_grass', 'splash', 'swim' ];
@@ -295,6 +298,30 @@ export class SoundScape {
 
 		const [ bank, trim ] = STEP[ surface ] || STEP.sand;
 		this._shot( bank, 'step', this.foot, MIX.step + trim + ( Math.random() - 0.5 ) * 3, 0.94 + Math.random() * 0.12 );
+
+	}
+
+	// Reusable humanoid action sounds. Supplying a world position keeps NPCs spatial while the
+	// local player naturally remains centred beneath the listener.
+	humanoidFootstep( position, { running = false, climbing = false } = {} ) {
+
+		const p = position || { x: this.env.lx, y: this.env.ly - 1.6, z: this.env.lz };
+		const trim = running ? 2 : climbing ? - 1 : 0;
+		return this._shotAt( 'humanoid_steps', 'humanoid', p.x, p.y, p.z, MIX.humanoidStep + trim + ( Math.random() - 0.5 ) * 2, running ? 1.08 : climbing ? 0.92 : 1, 0, 2.5, 1.15 );
+
+	}
+
+	humanoidSword( position ) {
+
+		const p = position || { x: this.env.lx, y: this.env.ly - 0.7, z: this.env.lz };
+		return this._shotAt( 'humanoid_sword', 'humanoid', p.x, p.y + 0.9, p.z, MIX.humanoidSword, 0.96 + Math.random() * 0.08, 0, 4, 1 );
+
+	}
+
+	humanoidGunshot( position ) {
+
+		const p = position || { x: this.env.lx, y: this.env.ly - 0.7, z: this.env.lz };
+		return this._shotAt( 'humanoid_gunshot', 'humanoid', p.x, p.y + 1.25, p.z, MIX.humanoidGunshot, 0.98 + Math.random() * 0.04, 0, 8, 0.85 );
 
 	}
 

@@ -371,6 +371,7 @@ export class NavalArtillery {
 		player.deckYaw = this.side > 0 ? - Math.PI / 2 : Math.PI / 2;
 		player.pitch = - 0.05;
 		player._camY = null;
+		player._characterCameraReady = false;
 		player.deckToWorld();
 
 	}

@@ -53,4 +53,9 @@ export const BANK = {
 	storm_wind: { file: 'storm-wind.mp3', loop: true, lufs: -18 },
 	storm_rain: { file: 'storm-rain.mp3', loop: true, lufs: -18 },
 	storm_bgm: { file: 'storm-bgm.mp3', loop: true, lufs: -18 },
+	// User-supplied humanoid action recordings. The boot track is exposed as short alternating
+	// slices so animation events can establish the cadence instead of playing a fixed loop.
+	humanoid_sword: { file: 'humanoid-sword.mp3', slices: [ [ 0, 0.84 ] ], lufs: [ -18 ] },
+	humanoid_steps: { file: 'humanoid-steps.mp3', slices: [ [ 0.02, 0.58 ], [ 0.68, 0.58 ], [ 1.36, 0.58 ], [ 2.04, 0.58 ], [ 2.72, 0.58 ], [ 3.4, 0.58 ], [ 4.08, 0.58 ], [ 4.76, 0.58 ] ], lufs: [ -20, -20, -20, -20, -20, -20, -20, -20 ] },
+	humanoid_gunshot: { file: 'humanoid-gunshot.mp3', slices: [ [ 0, 5.952 ] ], lufs: [ -16 ] },
 };
